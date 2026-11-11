@@ -38,6 +38,7 @@ set(ARKE_CORE_SOURCES
 # Android platform sources
 set(ARKE_ANDROID_SOURCES
     src/platform/android/jni_entry.cpp
+    src/platform/android/bionic_compat.c
     src/platform/android/dobby_hook_layer.cpp
     src/platform/android/gles_render_hook.cpp
     src/platform/android/vulkan_render_hook.cpp
@@ -74,6 +75,7 @@ target_link_libraries(arke_android PRIVATE
 
 target_link_options(arke_android PRIVATE
     -Wl,-soname,libarke_android.so
+    -Wl,-z,max-page-size=16384
 )
 
 if (ANDROID)

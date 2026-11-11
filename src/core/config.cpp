@@ -1,8 +1,10 @@
 #include "arke/config.hpp"
 #include "arke/logger.hpp"
-#include <fstream>
-#include <sstream>
-#include <filesystem>
+#include <cstdio>
+#include <cstring>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 namespace arke {
 
@@ -20,15 +22,15 @@ static std::string trim(const std::string& str) {
 
 bool ConfigManager::load(const std::string& configFilePath) {
     m_config.configPath = configFilePath;
-    std::ifstream file(configFilePath);
-    if (!file.is_open()) {
-        Logger::instance().info("config.json not found, using default configuration.");
+    FILE* fp = fopen(configFilePath.c_str(), "r");
+    if (!fp) {
+        Logger::instance().info("config.json not found at " + configFilePath + ", using defaults.");
         return false;
     }
 
-    std::string line;
-    while (std::getline(file, line)) {
-        line = trim(line);
+    char buffer[1024];
+    while (fgets(buffer, sizeof(buffer), fp)) {
+        std::string line = trim(buffer);
         if (line.empty() || line.front() == '{' || line.front() == '}') continue;
 
         auto colonPos = line.find(':');
@@ -40,7 +42,6 @@ bool ConfigManager::load(const std::string& configFilePath) {
         if (!val.empty() && val.back() == ',') val.pop_back();
         val = trim(val);
 
-        // Strip quotes from key
         if (key.size() >= 2 && key.front() == '"' && key.back() == '"') {
             key = key.substr(1, key.size() - 2);
         }
@@ -64,6 +65,7 @@ bool ConfigManager::load(const std::string& configFilePath) {
             m_config.graphicsDebug = (val == "true");
         }
     }
+    fclose(fp);
 
     Logger::instance().info("Loaded configuration: shaderpack='" + m_config.shaderpack +
                            "', enabled=" + (m_config.enabled ? "true" : "false"));
@@ -71,29 +73,39 @@ bool ConfigManager::load(const std::string& configFilePath) {
 }
 
 bool ConfigManager::save(const std::string& configFilePath) {
-    try {
-        std::filesystem::path p(configFilePath);
-        if (p.has_parent_path()) {
-            std::filesystem::create_directories(p.parent_path());
+    size_t lastSlash = configFilePath.find_last_of('/');
+    if (lastSlash != std::string::npos) {
+        std::string parentDir = configFilePath.substr(0, lastSlash);
+        std::string current;
+        for (size_t i = 0; i < parentDir.size(); ++i) {
+            current += parentDir[i];
+            if (parentDir[i] == '/' || i == parentDir.size() - 1) {
+                if (current != "/" && !current.empty()) {
+                    struct stat st;
+                    if (stat(current.c_str(), &st) != 0) {
+                        mkdir(current.c_str(), 0755);
+                    }
+                }
+            }
         }
-        std::ofstream file(configFilePath);
-        if (!file.is_open()) return false;
-
-        file << "{\n";
-        file << "  \"enabled\": " << (m_config.enabled ? "true" : "false") << ",\n";
-        file << "  \"shaderpack\": \"" << m_config.shaderpack << "\",\n";
-        file << "  \"strictMath\": " << (m_config.strictMath ? "true" : "false") << ",\n";
-        file << "  \"shadowDistance\": " << m_config.shadowDistance << ",\n";
-        file << "  \"colorSpace\": " << static_cast<uint32_t>(m_config.colorSpace) << ",\n";
-        file << "  \"perfStats\": " << (m_config.perfStats ? "true" : "false") << ",\n";
-        file << "  \"graphicsDebug\": " << (m_config.graphicsDebug ? "true" : "false") << "\n";
-        file << "}\n";
-
-        Logger::instance().info("Saved configuration to " + configFilePath);
-        return true;
-    } catch (...) {
-        return false;
     }
+
+    FILE* fp = fopen(configFilePath.c_str(), "w");
+    if (!fp) return false;
+
+    fprintf(fp, "{\n");
+    fprintf(fp, "  \"enabled\": %s,\n", m_config.enabled ? "true" : "false");
+    fprintf(fp, "  \"shaderpack\": \"%s\",\n", m_config.shaderpack.c_str());
+    fprintf(fp, "  \"strictMath\": %s,\n", m_config.strictMath ? "true" : "false");
+    fprintf(fp, "  \"shadowDistance\": %.1f,\n", m_config.shadowDistance);
+    fprintf(fp, "  \"colorSpace\": %u,\n", static_cast<uint32_t>(m_config.colorSpace));
+    fprintf(fp, "  \"perfStats\": %s,\n", m_config.perfStats ? "true" : "false");
+    fprintf(fp, "  \"graphicsDebug\": %s\n", m_config.graphicsDebug ? "true" : "false");
+    fprintf(fp, "}\n");
+    fclose(fp);
+
+    Logger::instance().info("Saved configuration to " + configFilePath);
+    return true;
 }
 
 } // namespace arke

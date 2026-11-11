@@ -11,8 +11,12 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define PAGE_START(addr) ((uintptr_t)(addr) & ~((uintptr_t)getpagesize() - 1))
-#define PAGE_SIZE ((uintptr_t)getpagesize())
+static inline size_t get_os_pagesize(void) {
+    long ps = sysconf(_SC_PAGESIZE);
+    return (ps > 0) ? (size_t)ps : 4096;
+}
+
+#define PAGE_START(addr, ps) ((uintptr_t)(addr) & ~((uintptr_t)(ps) - 1))
 
 struct HookContext {
     const char *target_lib;
@@ -83,6 +87,8 @@ static int elf_hook_callback(struct dl_phdr_info *info, size_t size, void *data)
     const ElfW(Rela) *reloc_tables[] = { rela_plt, rela_dyn };
     size_t reloc_sizes[] = { rela_plt_sz, rela_dyn_sz };
 
+    size_t page_sz = get_os_pagesize();
+
     for (int t = 0; t < 2; t++) {
         const ElfW(Rela) *table = reloc_tables[t];
         size_t bytes = reloc_sizes[t];
@@ -101,14 +107,14 @@ static int elf_hook_callback(struct dl_phdr_info *info, size_t size, void *data)
             if (strcmp(sym_name, ctx->target_sym) == 0) {
                 void **got_entry = (void **)(load_bias + table[i].r_offset);
 
-                uintptr_t page_start = PAGE_START(got_entry);
-                if (mprotect((void *)page_start, PAGE_SIZE, PROT_READ | PROT_WRITE) == 0) {
+                uintptr_t page_start = PAGE_START(got_entry, page_sz);
+                if (mprotect((void *)page_start, page_sz, PROT_READ | PROT_WRITE) == 0) {
                     if (ctx->orig_addr && *ctx->orig_addr == NULL) {
                         *ctx->orig_addr = *got_entry;
                     }
                     *got_entry = ctx->new_addr;
                     __builtin___clear_cache((char *)got_entry, (char *)got_entry + sizeof(void *));
-                    mprotect((void *)page_start, PAGE_SIZE, PROT_READ);
+                    mprotect((void *)page_start, page_sz, PROT_READ);
                     ctx->hooked = true;
                     return 1; // Done hooking this occurrence
                 }
@@ -163,8 +169,11 @@ void *shadowhook_hook_func_addr(
     void **orig_addr
 ) {
     if (!func_addr || !new_addr) return NULL;
-    int ret = DobbyHook(func_addr, new_addr, orig_addr);
-    return (ret == 0) ? new_addr : NULL;
+    // On Android 16 / XOM, inline patching is disabled for stability
+    if (orig_addr) {
+        *orig_addr = func_addr;
+    }
+    return NULL;
 }
 
 int shadowhook_unhook(void *stub) {

@@ -9,10 +9,14 @@
 #include <chrono>
 #include <atomic>
 #include <vector>
+#include <cstdio>
+#include <cstring>
 #include <dlfcn.h>
+#include <unistd.h>
 
 #if defined(__ANDROID__)
 #include <jni.h>
+#include <android/log.h>
 #endif
 
 // --- Exported C ABI Functions (Identical to Arke.dll) ---
@@ -72,6 +76,10 @@ void initialize_arke() {
         return; // Already initialized
     }
 
+#if defined(__ANDROID__)
+    __android_log_print(ANDROID_LOG_INFO, "Arke", "=== Arke-Android (v0.1.1) Initializing on Android 16 ARM64 ===");
+#endif
+
     // Initialize logger with primary and fallback directories
     const std::vector<std::string> logCandidates = {
         "/sdcard/games/com.mojang/mods/arke/logs",
@@ -87,7 +95,7 @@ void initialize_arke() {
         }
     }
 
-    arke::Logger::instance().info("=== Arke-Android (v0.1.1) Initializing ===");
+    arke::Logger::instance().info("=== Arke-Android Core Startup ===");
 
     // Load configuration with fallback candidates
     const std::vector<std::string> configCandidates = {
@@ -102,7 +110,7 @@ void initialize_arke() {
         }
     }
 
-    // Initialize Android inline and GOT hooking layer
+    // Initialize Android safe PLT/GOT hooking layer
     arke::platform::AndroidHookLayer::instance().initialize();
 
     // Initialize Dear ImGui overlay context
@@ -134,20 +142,31 @@ void initialize_arke() {
 
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((constructor)) static void arke_ctor_entry() {
+#if defined(__ANDROID__)
+    __android_log_print(ANDROID_LOG_INFO, "Arke", "arke_ctor_entry: spawned DT_NEEDED background initializer");
+#endif
     // Spawn detached worker thread so linker64 is never blocked during dlopen/DT_NEEDED loading
     std::thread initThread([]() {
-        // Wait briefly for libminecraftpe.so and libEGL.so to finish mapping and symbol binding
-        for (int i = 0; i < 30; i++) {
-            void* mcpe = dlopen("libminecraftpe.so", RTLD_NOLOAD | RTLD_LAZY);
-            void* egl = dlopen("libEGL.so", RTLD_NOLOAD | RTLD_LAZY);
-            if (mcpe && egl) {
-                dlclose(mcpe);
-                dlclose(egl);
-                break;
+        // Sleep 5 full seconds so libminecraftpe.so and Mali-G57 GPU driver (libGLES_mali.so) complete startup
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+
+        // Validate that libminecraftpe.so is mapped in /proc/self/maps before touching GOT
+        bool mcpeMapped = false;
+        for (int retry = 0; retry < 15; retry++) {
+            FILE* maps = fopen("/proc/self/maps", "r");
+            if (maps) {
+                char line[512];
+                while (fgets(line, sizeof(line), maps)) {
+                    if (strstr(line, "libminecraftpe.so")) {
+                        mcpeMapped = true;
+                        break;
+                    }
+                }
+                fclose(maps);
             }
-            if (mcpe) dlclose(mcpe);
-            if (egl) dlclose(egl);
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+            if (mcpeMapped) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
         }
 
         initialize_arke();

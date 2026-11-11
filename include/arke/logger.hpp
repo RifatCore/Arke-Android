@@ -2,14 +2,14 @@
 
 #include <string>
 #include <string_view>
-#include <fstream>
+#include <cstdio>
 #include <mutex>
 #include <sstream>
 #include <iostream>
 
 #if defined(__ANDROID__)
 #include <android/log.h>
-#define ARKE_LOG_TAG "Arke-Android"
+#define ARKE_LOG_TAG "Arke"
 #endif
 
 namespace arke {
@@ -39,7 +39,7 @@ private:
     Logger() = default;
     ~Logger();
 
-    std::ofstream m_logFile;
+    FILE* m_logFile{nullptr};
     std::mutex m_mutex;
     bool m_initialized{false};
 };
