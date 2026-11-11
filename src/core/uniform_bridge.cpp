@@ -119,6 +119,42 @@ void UniformBridge::setEnvironment(uint32_t dimension, float sunAngle, float rai
     m_frame.sky.moonDirection = {-std::cos(radSun), -std::sin(radSun), 0.0f};
 }
 
+void UniformBridge::setRenderDragonMatrix(const std::string& name, const float* values) {
+    if (!values) return;
+    Mat4 mat;
+    for (int i = 0; i < 16; i++) {
+        mat.m[i] = values[i];
+    }
+    if (name == "u_view" || name == "View" || name == "u_modelView") {
+        m_frame.camera.view = mat;
+        m_frame.camera.inverseView = computeInverse(mat);
+        m_pass.view = mat;
+    } else if (name == "u_proj" || name == "Proj" || name == "u_projection") {
+        m_frame.camera.projection = mat;
+        m_frame.camera.inverseProjection = computeInverse(mat);
+        m_pass.projection = mat;
+        m_pass.inverseViewProjection = computeInverse(mat);
+    }
+}
+
+void UniformBridge::setRenderDragonVector4(const std::string& name, const float* values) {
+    if (!values) return;
+    if (name == "ViewPositionAndTime") {
+        m_frame.camera.position = {values[0], values[1], values[2]};
+        m_frame.time.seconds = values[3];
+    } else if (name == "FogColor") {
+        m_frame.sky.fogColor = {values[0], values[1], values[2]};
+    } else if (name == "FogAndDistanceControl") {
+        m_frame.sky.fogStart = values[0];
+        m_frame.sky.fogEnd = values[1];
+        m_frame.world.renderDistance = values[2];
+    } else if (name == "LightWorldSpaceDirection") {
+        m_frame.sky.sunDirection = {values[0], values[1], values[2]};
+    } else if (name == "LightDiffuseColorAndIlluminance") {
+        m_frame.sky.skyColor = {values[0], values[1], values[2]};
+    }
+}
+
 std::string UniformBridge::generateGLSLUniformBlock() const {
     std::ostringstream ss;
     ss << "// Auto-generated Arke Uniform Block for OpenGL ES 3.2 ESSL\n"

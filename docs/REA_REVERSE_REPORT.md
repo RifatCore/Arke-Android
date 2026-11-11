@@ -437,3 +437,62 @@ To port Arke to Android Minecraft Bedrock, the Windows-specific subsystems must 
 | **UI Rendering** | `imgui_impl_dx12` + `imgui_impl_win32` | `imgui_impl_opengl3` + `imgui_impl_android` |
 | **Input Capture** | Win32 `WndProc` / `HIDController` | Android `ANativeWindow` touch dispatch / JNI input events |
 | **Mod Loader Entry** | `ll_mod_load` (LeviLamina Windows) | `JNI_OnLoad` (`libarke_android.so` / LeviLamina Android mod) |
+
+---
+
+## 8. Minecraft Bedrock 26.60 (arm64-v8a) RenderDragon & BGFX Analysis
+
+### 8.1 Target Binary Identity
+- **Binary Path**: `lib/arm64-v8a/libminecraftpe.so` (extracted from `minecraft-26-60-music.apk`)
+- **File Size**: `342,231,392` bytes (~326.37 MiB)
+- **ELF Class**: ELF64, Little Endian, AArch64 (ARMv8-A)
+- **Android NDK Ident**: NDK r28c (Android API 26+)
+- **GNU Build ID**: `eb291b883dfdfaff70c4999c2eabd61885ae3e15`
+- **Dynamic Symbol Count**: 90,670 exported symbols, 102 dynamic imported graphics symbols
+
+### 8.2 RenderDragon Material Architecture (`.material.bin`)
+On Android, Minecraft Bedrock 26.60 stores precompiled shader packages in `assets/assets/renderer/materials/*.material.bin`:
+- **Package Header**: Magic `\x1a\xda\x11\n` (RenderDragon Compiled Material Package), version 0.
+- **Embedded Target Shaders**: Contains high-performance ESSL 3.10 / ESSL 3.20 shaders (`#version 310 es` / `#version 320 es`).
+- **Pass Structure**: Core materials include `RenderChunk.material.bin` (terrain geometry), `Entity.material.bin` (mob & player rendering), `Sky.material.bin` (celestial & atmosphere), `DeferredShadingBase.material.bin` (PBR lighting passes), and `BlockSelectionOverlay.material.bin` (selection box outline).
+
+### 8.3 Exact PLT/GOT Relocation Offsets (libminecraftpe.so 26.60)
+The following functions are imported via PLT relocations (`R_AARCH64_JUMP_SLOT`) and can be intercepted via PLT hooking or inline hook trampolines:
+
+| Function Name | GOT Offset (AArch64) | Relocation Type | Target Library |
+| :--- | :--- | :--- | :--- |
+| `eglSwapBuffers` | `0x0000000013feb528` | `R_AARCH64_JUMP_SLOT` | `libEGL.so` |
+| `glShaderSource` | `0x0000000013fac9c8` | `R_AARCH64_JUMP_SLOT` | `libGLESv3.so` |
+| `glCompileShader`| `0x0000000013faca38` | `R_AARCH64_JUMP_SLOT` | `libGLESv3.so` |
+| `glLinkProgram`  | `0x0000000013fac940` | `R_AARCH64_JUMP_SLOT` | `libGLESv3.so` |
+| `glUseProgram`   | `0x0000000013facb28` | `R_AARCH64_JUMP_SLOT` | `libGLESv3.so` |
+| `glUniformMatrix4fv` | `0x0000000013fac920` | `R_AARCH64_JUMP_SLOT` | `libGLESv3.so` |
+| `glUniformMatrix3fv` | `0x0000000013fac8b8` | `R_AARCH64_JUMP_SLOT` | `libGLESv3.so` |
+| `glUniform4fv`   | `0x0000000013fac9d0` | `R_AARCH64_JUMP_SLOT` | `libGLESv3.so` |
+| `glDrawArrays`   | `0x0000000013fac910` | `R_AARCH64_JUMP_SLOT` | `libGLESv3.so` |
+| `glDrawElements` | `0x0000000013facae8` | `R_AARCH64_JUMP_SLOT` | `libGLESv3.so` |
+
+### 8.4 RenderDragon to Iris/OptiFine Uniform Mapping Table
+Recovered from decompiled `.material.bin` shaders and matched directly with Arke's `ArkeFrame` (b0) and `ArkePass` (b2) structures:
+
+| RenderDragon / BGFX Uniform | Type | Semantic / Description | Mapped Iris/Arke Field |
+| :--- | :--- | :--- | :--- |
+| `u_view` | `mat4` | View transformation matrix | `camera.view` / `gbufferModelView` |
+| `u_proj` | `mat4` | Camera projection matrix | `camera.projection` / `gbufferProjection` |
+| `u_viewProj` | `mat4` | Combined View-Projection | `camera.viewProjection` |
+| `u_invView` | `mat4` | Inverse View matrix | `camera.inverseView` / `gbufferModelViewInverse` |
+| `u_invProj` | `mat4` | Inverse Projection matrix | `camera.inverseProjection` / `gbufferProjectionInverse` |
+| `u_prevViewProj` | `mat4` | Previous frame View-Proj | `camera.previousViewProjection` |
+| `u_model[4]` | `mat4[4]`| Per-instance world matrix | `draw.model` / `bones` |
+| `ViewPositionAndTime` | `vec4` | xyz: Camera Pos, w: GameTime | `camera.position.xyz`, `time.seconds` |
+| `FogColor` | `vec4` | Atmospheric fog color RGBA | `sky.fogColor` / `fogColor` |
+| `FogAndDistanceControl` | `vec4` | x: start, y: end, z: chunk dist | `sky.fogStart`, `sky.fogEnd`, `world.renderDistance` |
+| `RenderChunkFogAlpha` | `vec4` | Terrain fog alpha blending | `sky.wetness` / `rain` factor |
+| `LightDiffuseColorAndIlluminance`| `vec4` | Sunlight/moonlight color + lux | `sky.daylight`, `sky.sunAngle` |
+| `LightWorldSpaceDirection` | `vec4` | Sun/Moon light vector | `sky.sunDirection` / `sunPosition` |
+| `SkyColor` | `vec4` | Clear sky ambient color | `sky.skyColor` / `skyColor` |
+| `OverlayColor` | `vec4` | Actor damage/tint overlay | `draw.overlay` / `changeColor` |
+| `TileLightColor` | `vec4` | Local voxel block/sky lighting | `player.eyeLight` (`gl_MultiTexCoord1`) |
+| `u_alphaRef4` | `vec4` | Cutout alpha test threshold | `draw.cutoff` / `alphaTest` |
+| `LightMapTexture` | `sampler2D` | Minecraft lightmap texture | Sampler slot 6 (`atlasSampler`) |
+

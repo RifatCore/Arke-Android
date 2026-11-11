@@ -39,6 +39,9 @@ public:
         const std::string& shaderName = "unknown"
     );
 
+    // Cross-compiles raw SPIR-V binary words directly to OpenGL ES 3.2 ESSL via SPIRV-Cross
+    std::string compileSpirvToESSL(const std::vector<uint32_t>& spirvWords);
+
 private:
     // Transforms legacy OpenGL / OptiFine constructs to modern ESSL 3.2 / SPIR-V compliant GLSL
     std::string modernizeOptiFineGLSL(const std::string& src, ShaderStage stage);

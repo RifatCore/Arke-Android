@@ -1,10 +1,28 @@
 #include "arke/shader/compiler.hpp"
 #include "arke/logger.hpp"
 #include "arke/uniform_bridge.hpp"
+#include "spirv_glsl.hpp"
 #include <regex>
 #include <sstream>
 
 namespace arke::shader {
+
+std::string CrossCompiler::compileSpirvToESSL(const std::vector<uint32_t>& spirvWords) {
+    if (spirvWords.empty()) return "";
+    try {
+        spirv_cross::CompilerGLSL glsl(spirvWords);
+        spirv_cross::CompilerGLSL::Options options;
+        options.version = 320;
+        options.es = true;
+        options.vulkan_semantics = false;
+        options.enable_420pack_extension = false;
+        glsl.set_common_options(options);
+        return glsl.compile();
+    } catch (const std::exception& e) {
+        Logger::instance().error("SPIRV-Cross compilation exception: " + std::string(e.what()));
+        return "";
+    }
+}
 
 std::string CrossCompiler::modernizeOptiFineGLSL(const std::string& src, ShaderStage stage) {
     std::string result = src;

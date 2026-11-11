@@ -12,6 +12,9 @@ namespace arke::platform {
 static void* (*orig_eglSwapBuffers)(void* dpy, void* surface) = nullptr;
 static void (*orig_glShaderSource)(uint32_t shader, int32_t count, const char* const* string, const int32_t* length) = nullptr;
 static void (*orig_glCompileShader)(uint32_t shader) = nullptr;
+static int32_t (*orig_glGetUniformLocation)(uint32_t program, const char* name) = nullptr;
+static void (*orig_glUniformMatrix4fv)(int32_t location, int32_t count, uint8_t transpose, const float* value) = nullptr;
+static void (*orig_glUniform4fv)(int32_t location, int32_t count, const float* value) = nullptr;
 
 static void* hook_eglSwapBuffers(void* dpy, void* surface) {
     onEglSwapBuffersPost();
@@ -41,6 +44,31 @@ static void hook_glCompileShader(uint32_t shader) {
         orig_glCompileShader(shader);
     }
     onGlCompileShaderPost(shader);
+}
+
+static int32_t hook_glGetUniformLocation(uint32_t program, const char* name) {
+    int32_t loc = -1;
+    if (orig_glGetUniformLocation) {
+        loc = orig_glGetUniformLocation(program, name);
+    }
+    if (loc >= 0 && name) {
+        onGlGetUniformLocationPost(program, name, loc);
+    }
+    return loc;
+}
+
+static void hook_glUniformMatrix4fv(int32_t location, int32_t count, uint8_t transpose, const float* value) {
+    onGlUniformMatrix4fvPre(location, count, transpose, value);
+    if (orig_glUniformMatrix4fv) {
+        orig_glUniformMatrix4fv(location, count, transpose, value);
+    }
+}
+
+static void hook_glUniform4fv(int32_t location, int32_t count, const float* value) {
+    onGlUniform4fvPre(location, count, value);
+    if (orig_glUniform4fv) {
+        orig_glUniform4fv(location, count, value);
+    }
 }
 
 AndroidHookLayer& AndroidHookLayer::instance() {
@@ -76,7 +104,7 @@ bool AndroidHookLayer::hookEGL() {
 
     bool success = hookFunction(eglSwap, (void*)hook_eglSwapBuffers, (void**)&orig_eglSwapBuffers);
     if (success) {
-        Logger::instance().info("Hooked eglSwapBuffers successfully!");
+        Logger::instance().info("Hooked eglSwapBuffers in libEGL.so successfully!");
     } else {
         Logger::instance().error("Failed to install hook on eglSwapBuffers");
     }
@@ -86,18 +114,21 @@ bool AndroidHookLayer::hookEGL() {
 bool AndroidHookLayer::hookGLES() {
     void* glSS = resolveSymbol("libGLESv3.so", "glShaderSource");
     void* glCS = resolveSymbol("libGLESv3.so", "glCompileShader");
+    void* glGUL = resolveSymbol("libGLESv3.so", "glGetUniformLocation");
+    void* glUM4 = resolveSymbol("libGLESv3.so", "glUniformMatrix4fv");
+    void* glU4 = resolveSymbol("libGLESv3.so", "glUniform4fv");
 
-    bool s1 = false, s2 = false;
-    if (glSS) {
-        s1 = hookFunction(glSS, (void*)hook_glShaderSource, (void**)&orig_glShaderSource);
-    }
-    if (glCS) {
-        s2 = hookFunction(glCS, (void*)hook_glCompileShader, (void**)&orig_glCompileShader);
-    }
+    bool s1 = false, s2 = false, s3 = false, s4 = false, s5 = false;
+    if (glSS) s1 = hookFunction(glSS, (void*)hook_glShaderSource, (void**)&orig_glShaderSource);
+    if (glCS) s2 = hookFunction(glCS, (void*)hook_glCompileShader, (void**)&orig_glCompileShader);
+    if (glGUL) s3 = hookFunction(glGUL, (void*)hook_glGetUniformLocation, (void**)&orig_glGetUniformLocation);
+    if (glUM4) s4 = hookFunction(glUM4, (void*)hook_glUniformMatrix4fv, (void**)&orig_glUniformMatrix4fv);
+    if (glU4) s5 = hookFunction(glU4, (void*)hook_glUniform4fv, (void**)&orig_glUniform4fv);
 
-    Logger::instance().info("Hooked glShaderSource (" + std::string(s1 ? "OK" : "FAIL") +
-                           ") and glCompileShader (" + std::string(s2 ? "OK" : "FAIL") + ")");
-    return s1 || s2;
+    Logger::instance().info("Hooked libGLESv3 exports: glShaderSource(" + std::string(s1 ? "OK" : "FAIL") +
+                           ") glCompileShader(" + std::string(s2 ? "OK" : "FAIL") +
+                           ") glUniform(" + std::string(s4 ? "OK" : "FAIL") + ")");
+    return s1 || s2 || s4;
 }
 
 bool AndroidHookLayer::hookVulkan() {
@@ -110,13 +141,21 @@ bool AndroidHookLayer::hookVulkan() {
 }
 
 bool AndroidHookLayer::hookRenderDragon() {
-    // Intercept libminecraftpe.so RenderDragon internal hooks
+    // Intercept libminecraftpe.so RenderDragon internal hooks & PLT imports
     void* mcHandle = dlopen("libminecraftpe.so", RTLD_LAZY | RTLD_NOLOAD);
     if (mcHandle) {
         Logger::instance().info("Bound to target process: libminecraftpe.so");
-    } else {
-        Logger::instance().info("Target libminecraftpe.so not yet loaded; standing by for dynamic resolution.");
     }
+
+    // Hook libminecraftpe.so GOT entries via ShadowHook
+    shadowhook_hook_sym_name("libminecraftpe.so", "eglSwapBuffers", (void*)hook_eglSwapBuffers, (void**)&orig_eglSwapBuffers);
+    shadowhook_hook_sym_name("libminecraftpe.so", "glShaderSource", (void*)hook_glShaderSource, (void**)&orig_glShaderSource);
+    shadowhook_hook_sym_name("libminecraftpe.so", "glCompileShader", (void*)hook_glCompileShader, (void**)&orig_glCompileShader);
+    shadowhook_hook_sym_name("libminecraftpe.so", "glGetUniformLocation", (void*)hook_glGetUniformLocation, (void**)&orig_glGetUniformLocation);
+    shadowhook_hook_sym_name("libminecraftpe.so", "glUniformMatrix4fv", (void*)hook_glUniformMatrix4fv, (void**)&orig_glUniformMatrix4fv);
+    shadowhook_hook_sym_name("libminecraftpe.so", "glUniform4fv", (void*)hook_glUniform4fv, (void**)&orig_glUniform4fv);
+
+    Logger::instance().info("Installed RenderDragon GOT hooks on libminecraftpe.so (26.60)");
     return true;
 }
 

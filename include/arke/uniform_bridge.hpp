@@ -14,6 +14,10 @@ public:
     void setPlayerState(uint32_t flags, uint32_t medium, float health, float hunger);
     void setEnvironment(uint32_t dimension, float sunAngle, float rain, float thunder, const Vec3& skyColor, const Vec3& fogColor);
 
+    // Intercepted RenderDragon uniform updates
+    void setRenderDragonMatrix(const std::string& name, const float* values);
+    void setRenderDragonVector4(const std::string& name, const float* values);
+
     ArkeFrame& getFrame() { return m_frame; }
     const ArkeFrame& getFrame() const { return m_frame; }
 

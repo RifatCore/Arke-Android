@@ -107,6 +107,47 @@ void main() {
     std::cout << "  -> CrossCompiler PASSED!" << std::endl;
 }
 
+void testUniformBridgeInterception() {
+    std::cout << "[Test] Running UniformBridge RenderDragon Interception..." << std::endl;
+    auto& ub = arke::UniformBridge::instance();
+
+    // 1. Test ViewPositionAndTime
+    float posAndTime[4] = {128.5f, 64.0f, -256.0f, 42.0f};
+    ub.setRenderDragonVector4("ViewPositionAndTime", posAndTime);
+    assert(ub.getFrame().camera.position.x == 128.5f);
+    assert(ub.getFrame().camera.position.y == 64.0f);
+    assert(ub.getFrame().camera.position.z == -256.0f);
+    assert(ub.getFrame().time.seconds == 42.0f);
+
+    // 2. Test FogColor
+    float fogCol[4] = {0.7f, 0.8f, 1.0f, 1.0f};
+    ub.setRenderDragonVector4("FogColor", fogCol);
+    assert(ub.getFrame().sky.fogColor.x == 0.7f);
+    assert(ub.getFrame().sky.fogColor.y == 0.8f);
+    assert(ub.getFrame().sky.fogColor.z == 1.0f);
+
+    // 3. Test FogAndDistanceControl
+    float fogDist[4] = {16.0f, 128.0f, 16.0f, 0.0f};
+    ub.setRenderDragonVector4("FogAndDistanceControl", fogDist);
+    assert(ub.getFrame().sky.fogStart == 16.0f);
+    assert(ub.getFrame().sky.fogEnd == 128.0f);
+    assert(ub.getFrame().world.renderDistance == 16.0f);
+
+    // 4. Test View matrix
+    float viewMat[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        10.0f, 20.0f, 30.0f, 1.0f
+    };
+    ub.setRenderDragonMatrix("u_view", viewMat);
+    assert(ub.getFrame().camera.view.m[12] == 10.0f);
+    assert(ub.getFrame().camera.view.m[13] == 20.0f);
+    assert(ub.getFrame().camera.view.m[14] == 30.0f);
+
+    std::cout << "  -> UniformBridge Interception PASSED!" << std::endl;
+}
+
 int main() {
     std::cout << "==========================================" << std::endl;
     std::cout << "  Arke-Android Unit & Transpile Test Suite" << std::endl;
@@ -115,7 +156,9 @@ int main() {
     testPropertiesParser();
     testPreprocessor();
     testCrossCompiler();
+    testUniformBridgeInterception();
 
     std::cout << "\nALL ARKE-ANDROID TESTS PASSED SUCCESSFULLY!" << std::endl;
     return 0;
 }
+
