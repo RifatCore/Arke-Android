@@ -33,6 +33,8 @@ public:
     void warn(std::string_view msg)  { log(LogLevel::Warn, msg); }
     void error(std::string_view msg) { log(LogLevel::Error, msg); }
 
+    bool isInitialized() const { return m_initialized; }
+
 private:
     Logger() = default;
     ~Logger();

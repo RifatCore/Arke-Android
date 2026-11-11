@@ -72,6 +72,10 @@ target_link_libraries(arke_android PRIVATE
     GLESv3
 )
 
+target_link_options(arke_android PRIVATE
+    -Wl,-soname,libarke_android.so
+)
+
 if (ANDROID)
     target_link_libraries(arke_android PRIVATE
         android

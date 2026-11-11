@@ -12,8 +12,12 @@ Logger& Logger::instance() {
 
 void Logger::init(const std::string& logDir) {
     std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_logFile.is_open()) {
+        m_logFile.close();
+    }
     try {
-        std::filesystem::create_directories(logDir);
+        std::error_code ec;
+        std::filesystem::create_directories(logDir, ec);
         std::string logPath = logDir + "/arke.log";
         m_logFile.open(logPath, std::ios::out | std::ios::app);
         m_initialized = m_logFile.is_open();
