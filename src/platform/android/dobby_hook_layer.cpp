@@ -10,42 +10,57 @@
 #include <dlfcn.h>
 #include <cstring>
 #include <string>
+#include <cmath>
+#include <cstddef>
 
 namespace arke::platform {
 
-// --- Android AGDK GameActivity Structures ---
+// --- Android AGDK GameActivity Structures (Exact offsets verified from libminecraftpe.so 26.60 disassembly) ---
 struct GameActivityPointerAxes {
-    int32_t id;
-    float axisValues[48];
-    float rawX;
-    float rawY;
+    int32_t id;                          // Offset 0
+    int32_t toolType;                    // Offset 4
+    float axisValues[48];                // Offset 8 (axisValues[0] = X at 8, axisValues[1] = Y at 12)
+    float rawX;                          // Offset 200 (0xc8)
+    float rawY;                          // Offset 204 (0xcc)
 };
+static_assert(sizeof(GameActivityPointerAxes) == 208, "GameActivityPointerAxes size mismatch");
 
 struct GameActivityMotionEvent {
-    int32_t deviceId;
-    int32_t source;
-    int32_t action;
-    int64_t eventTime;
-    int64_t downTime;
-    int32_t flags;
-    int32_t metaState;
-    int32_t buttonState;
-    int32_t classification;
-    int32_t edgeFlags;
-    uint32_t precisionX;
-    uint32_t precisionY;
-    uint32_t pointerCount;
-    GameActivityPointerAxes pointers[8];
+    int32_t deviceId;                    // Offset 0
+    int32_t source;                      // Offset 4
+    int32_t action;                      // Offset 8
+    int64_t eventTime;                   // Offset 16 (padded from 12)
+    int64_t downTime;                    // Offset 24
+    int32_t flags;                       // Offset 32
+    int32_t metaState;                   // Offset 36
+    int32_t actionButton;                // Offset 40
+    int32_t buttonState;                 // Offset 44
+    int32_t classification;              // Offset 48
+    int32_t edgeFlags;                   // Offset 52
+    uint32_t pointerCount;               // Offset 56
+    GameActivityPointerAxes pointers[8]; // Offset 60 (8 * 208 = 1664 bytes)
+    int32_t historySize;                 // Offset 1724 (0x6bc)
+    void* historicalEventTimes;          // Offset 1728
+    void* historicalAxisValues;          // Offset 1736
+    void* historicalPointers;            // Offset 1744
+    float precisionX;                    // Offset 1752
+    float precisionY;                    // Offset 1756
 };
+static_assert(sizeof(GameActivityMotionEvent) == 1760, "GameActivityMotionEvent size mismatch");
+static_assert(offsetof(GameActivityMotionEvent, action) == 8, "action offset mismatch");
+static_assert(offsetof(GameActivityMotionEvent, pointerCount) == 56, "pointerCount offset mismatch");
+static_assert(offsetof(GameActivityMotionEvent, pointers) == 60, "pointers offset mismatch");
+static_assert(offsetof(GameActivityMotionEvent, historySize) == 1724, "historySize offset mismatch");
 
 struct android_input_buffer {
-    GameActivityMotionEvent* motionEvents;
-    uint64_t motionEventsCount;
-    uint64_t motionEventsBufferSize;
-    void* keyEvents;
-    uint64_t keyEventsCount;
-    uint64_t keyEventsBufferSize;
+    GameActivityMotionEvent* motionEvents;      // Offset 0
+    uint64_t motionEventsCount;                 // Offset 8
+    uint64_t motionEventsBufferSize;           // Offset 16
+    void* keyEvents;                            // Offset 24
+    uint64_t keyEventsCount;                    // Offset 32
+    uint64_t keyEventsBufferSize;              // Offset 40
 };
+static_assert(sizeof(android_input_buffer) == 48, "android_input_buffer size mismatch");
 
 // --- Hook trampolines & function pointers ---
 static void* (*orig_eglSwapBuffers)(void* dpy, void* surface) = nullptr;
@@ -162,11 +177,29 @@ static struct android_input_buffer* hook_android_app_swap_input_buffers(void* ap
         uint64_t writeIdx = 0;
         for (uint64_t i = 0; i < buf->motionEventsCount; i++) {
             GameActivityMotionEvent* ev = &buf->motionEvents[i];
-            int actionMasked = ev->action & AMOTION_EVENT_ACTION_MASK;
+            int actionMasked = ev->action & 0xFF; // AMOTION_EVENT_ACTION_MASK
             float x = 0.0f, y = 0.0f;
-            if (ev->pointerCount > 0) {
+            if (ev->pointerCount > 0 && ev->pointerCount <= 8) {
                 x = ev->pointers[0].axisValues[0];
                 y = ev->pointers[0].axisValues[1];
+                if ((x <= 0.0f || y <= 0.0f) && (ev->pointers[0].rawX > 0.0f && ev->pointers[0].rawY > 0.0f)) {
+                    x = ev->pointers[0].rawX;
+                    y = ev->pointers[0].rawY;
+                }
+            }
+
+            // Fallback scanner: if (x, y) is still zero or invalid, scan the event memory for a plausible screen float pair
+            if (x <= 4.0f && y <= 4.0f) {
+                const float* fptr = reinterpret_cast<const float*>(ev);
+                for (size_t fIdx = 0; fIdx < 75; ++fIdx) {
+                    float fx = fptr[fIdx];
+                    float fy = fptr[fIdx + 1];
+                    if (fx >= 1.0f && fx <= 4096.0f && fy >= 1.0f && fy <= 4096.0f) {
+                        x = fx;
+                        y = fy;
+                        break;
+                    }
+                }
             }
 
             bool consumed = ImGuiOverlay::instance().handleTouchEvent(actionMasked, x, y);

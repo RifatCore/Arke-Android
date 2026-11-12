@@ -9,6 +9,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <cstring>
+#include <cstdio>
+#include <cmath>
 #include <unordered_set>
 
 extern "C" void ArkeReload(void);
@@ -146,74 +148,98 @@ bool ImGuiOverlay::handleTouchEvent(int action, float x, float y) {
 
     ImGuiIO& io = ImGui::GetIO();
 
+    // CRITICAL SAFEGUARD:
+    // If x <= 4.0f && y <= 4.0f (invalid/zero coordinates) or isnan(x) or isnan(y) or x > 4096.0f or y > 4096.0f,
+    // NEVER toggle the menu and NEVER consume the event (return false)!
+    if (std::isnan(x) || std::isnan(y) || (x <= 4.0f && y <= 4.0f) || x > 4096.0f || y > 4096.0f) {
+        static int s_safeguardLogCount = 0;
+        if (s_safeguardLogCount < 10) {
+            s_safeguardLogCount++;
+            char logBuf[128];
+            snprintf(logBuf, sizeof(logBuf), "[Touch] action=%d x=%.1f y=%.1f menuOpen=%d consumed=0 (IGNORED_SAFEGUARD)",
+                     action, x, y, m_showSettings ? 1 : 0);
+            Logger::instance().info(logBuf);
+        }
+        return false;
+    }
+
     // Android AMotionEvent action definitions:
     // 0 = ACTION_DOWN, 1 = ACTION_UP, 2 = ACTION_MOVE, 3 = ACTION_CANCEL, 5 = ACTION_POINTER_DOWN, 6 = ACTION_POINTER_UP
     bool isDown = (action == 0 || action == 5);
-    bool isUp = (action == 1 || action == 6 || action == 3);
+    bool isUp   = (action == 1 || action == 6 || action == 3);
     bool isMove = (action == 2);
 
-    // 1. If Settings window is open, check if touch is inside Settings window bounds
-    // Settings window: pos (16, 74), size (520, 420) -> rect: x in [16, 540], y in [70, 500]
-    if (m_showSettings) {
-        bool insideSettings = (x >= 16.0f && x <= 540.0f && y >= 70.0f && y <= 500.0f);
-        if (insideSettings) {
+    // Hitbox definitions:
+    // Top-left Arke launcher button: pos (16, 16), size (120, 48) -> strictly [12, 142] x [12, 66] (NEVER includes (0, 0)!)
+    bool insideLauncher = (x >= 12.0f && x <= 142.0f && y >= 12.0f && y <= 66.0f);
+
+    // Arke Settings window: pos (16, 76), size (540, 420) -> strictly [16, 556] x [76, 496]
+    bool insideSettings = (x >= 16.0f && x <= 556.0f && y >= 76.0f && y <= 496.0f);
+
+    bool consumed = false;
+
+    if (!m_showSettings) {
+        // --- MENU IS CLOSED ---
+        // ONLY consume the touch event if x is in [12, 142] AND y is in [12, 66].
+        // On ACTION_DOWN inside [12, 142] x [12, 66], call tryToggleSettings().
+        // For ALL other coordinates on screen (x > 142 || y > 66), do NOT consume the event—let Minecraft receive 100% of touches!
+        if (insideLauncher) {
+            if (isDown) {
+                tryToggleSettings();
+            }
+            consumed = true;
+        } else {
+            consumed = false;
+        }
+    } else {
+        // --- MENU IS OPEN ---
+        // 1. If ACTION_DOWN is inside launcher button [12, 142] x [12, 66], toggle m_showSettings to false (close menu) and consume.
+        if (insideLauncher) {
+            if (isDown) {
+                m_showSettings = false;
+                m_showDetails = false;
+                Logger::instance().info("[ImGuiOverlay] Settings closed via launcher button tap");
+            }
+            consumed = true;
+        }
+        // 2. If touch is inside Arke Settings window [16, 556] x [76, 496]:
+        // Do NOT toggle m_showSettings! Forward the real (x, y) to ImGui so widgets work, and consume.
+        else if (insideSettings) {
             io.AddMousePosEvent(x, y);
-            if (isDown || isMove) {
+            if (isDown) {
                 io.AddMouseButtonEvent(0, true);
+            } else if (isMove) {
+                // Dragging in ImGui - pos is updated above
             } else if (isUp) {
                 m_pendingMouseUp = true;
                 m_pendingMouseUpX = x;
                 m_pendingMouseUpY = y;
+                io.AddMouseButtonEvent(0, false);
             }
-            return true; // Completely consumed by Arke Settings window
+            consumed = true;
         }
-    }
-
-    // 2. If Details window is open, check bounds: pos (16, 74), size (520, 320)
-    if (m_showDetails) {
-        bool insideDetails = (x >= 16.0f && x <= 540.0f && y >= 70.0f && y <= 400.0f);
-        if (insideDetails) {
-            io.AddMousePosEvent(x, y);
-            if (isDown || isMove) {
-                io.AddMouseButtonEvent(0, true);
-            } else if (isUp) {
-                m_pendingMouseUp = true;
-                m_pendingMouseUpX = x;
-                m_pendingMouseUpY = y;
+        // 3. If touch is OUTSIDE both hitboxes:
+        // Let it pass through to the game (do NOT toggle unless user taps Arke button or Close Window).
+        else {
+            if (isUp) {
+                io.AddMousePosEvent(x, y);
+                io.AddMouseButtonEvent(0, false);
             }
-            return true; // Completely consumed by Details window
+            consumed = false;
         }
     }
 
-    // 3. Check Arke Launcher Button hitbox: pos (16, 16), size (120, 48)
-    // Hitbox: x in [0, 160], y in [0, 68]. Notice y strictly <= 68 so it NEVER overlaps with Settings (y >= 70)
-    bool insideLauncher = (x >= 0.0f && x <= 160.0f && y >= 0.0f && y <= 68.0f);
-    if (insideLauncher) {
-        if (isDown) {
-            tryToggleSettings();
-        }
-        return true; // Consumed by launcher button
+    // Log the first 20 touch events to arke.log
+    static int s_loggedTouchCount = 0;
+    if (s_loggedTouchCount < 20) {
+        s_loggedTouchCount++;
+        char logBuf[128];
+        snprintf(logBuf, sizeof(logBuf), "[Touch] action=%d x=%.1f y=%.1f menuOpen=%d consumed=%d",
+                 action, x, y, m_showSettings ? 1 : 0, consumed ? 1 : 0);
+        Logger::instance().info(logBuf);
     }
 
-    // 4. Check if ImGui wants mouse capture anywhere else
-    if (io.WantCaptureMouse) {
-        io.AddMousePosEvent(x, y);
-        if (isDown || isMove) {
-            io.AddMouseButtonEvent(0, true);
-        } else if (isUp) {
-            m_pendingMouseUp = true;
-            m_pendingMouseUpX = x;
-            m_pendingMouseUpY = y;
-        }
-        return true;
-    }
-
-    // 5. Unconsumed touch: forward position and release to ImGui, let Minecraft PE handle gameplay touch
-    if (isUp) {
-        io.AddMousePosEvent(x, y);
-        io.AddMouseButtonEvent(0, false);
-    }
-    return false;
+    return consumed;
 }
 
 void ImGuiOverlay::newFrame(float width, float height) {
@@ -264,8 +290,8 @@ void ImGuiOverlay::drawLauncherButton() {
 }
 
 void ImGuiOverlay::drawSettingsWindow() {
-    ImGui::SetNextWindowPos(ImVec2(16.0f, 74.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(520.0f, 420.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(16.0f, 76.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(540.0f, 420.0f), ImGuiCond_Always);
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
 
@@ -330,15 +356,17 @@ void ImGuiOverlay::drawSettingsWindow() {
         }
         ImGui::SameLine();
         if (ImGui::Button("Close Window", ImVec2(150.0f, 36.0f))) {
-            tryToggleSettings();
+            m_showSettings = false;
+            m_showDetails = false;
+            Logger::instance().info("[ImGuiOverlay] Settings closed via Close Window button");
         }
     }
     ImGui::End();
 }
 
 void ImGuiOverlay::drawDetailsWindow() {
-    ImGui::SetNextWindowPos(ImVec2(16.0f, 74.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(520.0f, 320.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(16.0f, 76.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(540.0f, 320.0f), ImGuiCond_Always);
 
     if (ImGui::Begin("Arke Details###arke_details", &m_showDetails)) {
         ImGui::Text("Target: Minecraft Bedrock 26.60 (arm64-v8a)");
