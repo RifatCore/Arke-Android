@@ -22,7 +22,7 @@ ImGuiOverlay& ImGuiOverlay::instance() {
 
 bool ImGuiOverlay::init() {
     if (m_initialized) return true;
-    Logger::instance().info("[ImGuiOverlay] Initializing Android Dear ImGui Overlay...");
+    Logger::instance().info("[ImGuiOverlay] Initializing Android Dear ImGui Overlay (Mobile DPI 1600x720)...");
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -30,16 +30,20 @@ bool ImGuiOverlay::init() {
     io.DisplaySize = ImVec2(m_displayWidth, m_displayHeight);
     io.IniFilename = nullptr; // Don't write imgui.ini on Android
 
+    // Mobile font & touch DPI scaling
+    io.FontGlobalScale = 1.65f;
+
     ImGui::StyleColorsDark();
 
-    // Scale UI comfortably for mobile touchscreens
     ImGuiStyle& style = ImGui::GetStyle();
-    style.ScaleAllSizes(1.6f);
-    style.WindowRounding = 8.0f;
+    style.ScaleAllSizes(1.5f);
     style.FrameRounding = 6.0f;
+    style.WindowRounding = 8.0f;
     style.PopupRounding = 6.0f;
     style.ScrollbarRounding = 6.0f;
     style.GrabRounding = 6.0f;
+    style.ItemSpacing = ImVec2(10.0f, 8.0f);
+    style.TouchExtraPadding = ImVec2(4.0f, 4.0f);
 
     // Initialize OpenGL ES 3.0+ backend
     if (!ImGui_ImplOpenGL3_Init("#version 300 es")) {
@@ -49,7 +53,7 @@ bool ImGuiOverlay::init() {
 
     m_initialized = true;
     scanShaderPacks();
-    Logger::instance().info("[ImGuiOverlay] Dear ImGui Overlay initialized successfully.");
+    Logger::instance().info("[ImGuiOverlay] Dear ImGui Overlay initialized successfully with mobile DPI scaling.");
     return true;
 }
 
@@ -59,6 +63,18 @@ void ImGuiOverlay::shutdown() {
     ImGui::DestroyContext();
     m_initialized = false;
     Logger::instance().info("[ImGuiOverlay] Shut down Android Dear ImGui Overlay.");
+}
+
+bool ImGuiOverlay::tryToggleSettings() {
+    auto now = std::chrono::steady_clock::now();
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastToggleTime).count();
+    if (elapsedMs < 250) {
+        return false; // Debounce rejection
+    }
+    m_lastToggleTime = now;
+    m_showSettings = !m_showSettings;
+    Logger::instance().info("[ImGuiOverlay] Settings window toggled: " + std::string(m_showSettings ? "OPEN" : "CLOSED"));
+    return true;
 }
 
 void ImGuiOverlay::scanShaderPacks() {
@@ -129,42 +145,75 @@ bool ImGuiOverlay::handleTouchEvent(int action, float x, float y) {
     }
 
     ImGuiIO& io = ImGui::GetIO();
-    io.AddMousePosEvent(x, y);
 
     // Android AMotionEvent action definitions:
     // 0 = ACTION_DOWN, 1 = ACTION_UP, 2 = ACTION_MOVE, 3 = ACTION_CANCEL, 5 = ACTION_POINTER_DOWN, 6 = ACTION_POINTER_UP
     bool isDown = (action == 0 || action == 5);
     bool isUp = (action == 1 || action == 6 || action == 3);
+    bool isMove = (action == 2);
 
-    if (isDown) {
-        io.AddMouseButtonEvent(0, true);
-    } else if (isUp) {
-        io.AddMouseButtonEvent(0, false);
+    // 1. If Settings window is open, check if touch is inside Settings window bounds
+    // Settings window: pos (16, 74), size (520, 420) -> rect: x in [16, 540], y in [70, 500]
+    if (m_showSettings) {
+        bool insideSettings = (x >= 16.0f && x <= 540.0f && y >= 70.0f && y <= 500.0f);
+        if (insideSettings) {
+            io.AddMousePosEvent(x, y);
+            if (isDown || isMove) {
+                io.AddMouseButtonEvent(0, true);
+            } else if (isUp) {
+                m_pendingMouseUp = true;
+                m_pendingMouseUpX = x;
+                m_pendingMouseUpY = y;
+            }
+            return true; // Completely consumed by Arke Settings window
+        }
     }
 
-    // Direct touch hot-zone: top-left corner toggle
-    bool insideLauncher = (x >= 0.0f && x <= 220.0f && y >= 0.0f && y <= 110.0f);
-    if (insideLauncher && isDown) {
-        toggleSettings();
-        Logger::instance().info("[ImGuiOverlay] Toggled Arke settings menu via touch on launcher button.");
+    // 2. If Details window is open, check bounds: pos (16, 74), size (520, 320)
+    if (m_showDetails) {
+        bool insideDetails = (x >= 16.0f && x <= 540.0f && y >= 70.0f && y <= 400.0f);
+        if (insideDetails) {
+            io.AddMousePosEvent(x, y);
+            if (isDown || isMove) {
+                io.AddMouseButtonEvent(0, true);
+            } else if (isUp) {
+                m_pendingMouseUp = true;
+                m_pendingMouseUpX = x;
+                m_pendingMouseUpY = y;
+            }
+            return true; // Completely consumed by Details window
+        }
+    }
+
+    // 3. Check Arke Launcher Button hitbox: pos (16, 16), size (120, 48)
+    // Hitbox: x in [0, 160], y in [0, 68]. Notice y strictly <= 68 so it NEVER overlaps with Settings (y >= 70)
+    bool insideLauncher = (x >= 0.0f && x <= 160.0f && y >= 0.0f && y <= 68.0f);
+    if (insideLauncher) {
+        if (isDown) {
+            tryToggleSettings();
+        }
+        return true; // Consumed by launcher button
+    }
+
+    // 4. Check if ImGui wants mouse capture anywhere else
+    if (io.WantCaptureMouse) {
+        io.AddMousePosEvent(x, y);
+        if (isDown || isMove) {
+            io.AddMouseButtonEvent(0, true);
+        } else if (isUp) {
+            m_pendingMouseUp = true;
+            m_pendingMouseUpX = x;
+            m_pendingMouseUpY = y;
+        }
         return true;
     }
 
-    // Check if touch is inside the open Settings window
-    if (m_showSettings) {
-        if (io.WantCaptureMouse || (x >= 20.0f && x <= 580.0f && y >= 70.0f && y <= 550.0f)) {
-            return true;
-        }
+    // 5. Unconsumed touch: forward position and release to ImGui, let Minecraft PE handle gameplay touch
+    if (isUp) {
+        io.AddMousePosEvent(x, y);
+        io.AddMouseButtonEvent(0, false);
     }
-
-    // Check if touch is inside the open Details window
-    if (m_showDetails) {
-        if (io.WantCaptureMouse || (x >= 20.0f && x <= 580.0f && y >= 70.0f && y <= 450.0f)) {
-            return true;
-        }
-    }
-
-    return io.WantCaptureMouse;
+    return false;
 }
 
 void ImGuiOverlay::newFrame(float width, float height) {
@@ -178,6 +227,13 @@ void ImGuiOverlay::newFrame(float width, float height) {
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(width, height);
     io.DeltaTime = 1.0f / 60.0f;
+
+    // Dispatch delayed mouse release on frame boundary for 100% reliable touch button clicks
+    if (m_pendingMouseUp) {
+        io.AddMousePosEvent(m_pendingMouseUpX, m_pendingMouseUpY);
+        io.AddMouseButtonEvent(0, false);
+        m_pendingMouseUp = false;
+    }
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui::NewFrame();
@@ -198,9 +254,8 @@ void ImGuiOverlay::drawLauncherButton() {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.55f, 0.95f, 0.95f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.10f, 0.35f, 0.75f, 1.0f));
 
-        if (ImGui::Button("Arke##arke_launcher", ImVec2(140.0f, 50.0f))) {
-            toggleSettings();
-            Logger::instance().info("[ImGuiOverlay] Toggled Arke settings menu via ImGui Button click.");
+        if (ImGui::Button("Arke##arke_launcher", ImVec2(120.0f, 48.0f))) {
+            tryToggleSettings();
         }
 
         ImGui::PopStyleColor(3);
@@ -209,10 +264,12 @@ void ImGuiOverlay::drawLauncherButton() {
 }
 
 void ImGuiOverlay::drawSettingsWindow() {
-    ImGui::SetNextWindowPos(ImVec2(30.0f, 80.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(520.0f, 440.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(16.0f, 74.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(520.0f, 420.0f), ImGuiCond_Always);
 
-    if (ImGui::Begin("Arke Settings###arke_settings", &m_showSettings)) {
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
+
+    if (ImGui::Begin("Arke Settings###arke_settings", &m_showSettings, flags)) {
         ImGui::TextColored(ImVec4(0.2f, 0.7f, 1.0f, 1.0f), "Arke Shader Engine (v0.1.1 Android ARM64)");
         ImGui::Text("Minecraft Bedrock 26.60 | Mali-G57 GLES 3.2");
         ImGui::Separator();
@@ -222,7 +279,7 @@ void ImGuiOverlay::drawSettingsWindow() {
         ImGui::Text("Active Pack: %s", currentPack.c_str());
         ImGui::Text("Loaded Passes: %zu", shader::ShaderPipeline::instance().getPasses().size());
 
-        if (ImGui::Button("Rescan Packs", ImVec2(150.0f, 36.0f))) {
+        if (ImGui::Button("Rescan Packs", ImVec2(140.0f, 36.0f))) {
             scanShaderPacks();
         }
 
@@ -244,7 +301,7 @@ void ImGuiOverlay::drawSettingsWindow() {
             ImGui::EndCombo();
         }
 
-        if (ImGui::Button("Apply & Load Pack", ImVec2(180.0f, 38.0f))) {
+        if (ImGui::Button("Apply & Load Pack", ImVec2(170.0f, 38.0f))) {
             if (!m_selectedPackPath.empty()) {
                 shader::ShaderPipeline::instance().loadPack(m_selectedPackPath);
                 auto& cfg = ConfigManager::instance().get();
@@ -253,7 +310,7 @@ void ImGuiOverlay::drawSettingsWindow() {
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("Reload (ArkeReload)", ImVec2(180.0f, 38.0f))) {
+        if (ImGui::Button("Reload Shaders", ImVec2(160.0f, 38.0f))) {
             ArkeReload();
         }
 
@@ -272,16 +329,16 @@ void ImGuiOverlay::drawSettingsWindow() {
             m_showDetails = !m_showDetails;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Close Settings", ImVec2(150.0f, 36.0f))) {
-            m_showSettings = false;
+        if (ImGui::Button("Close Window", ImVec2(150.0f, 36.0f))) {
+            tryToggleSettings();
         }
     }
     ImGui::End();
 }
 
 void ImGuiOverlay::drawDetailsWindow() {
-    ImGui::SetNextWindowPos(ImVec2(60.0f, 100.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(500.0f, 300.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(16.0f, 74.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(520.0f, 320.0f), ImGuiCond_Always);
 
     if (ImGui::Begin("Arke Details###arke_details", &m_showDetails)) {
         ImGui::Text("Target: Minecraft Bedrock 26.60 (arm64-v8a)");
@@ -297,7 +354,7 @@ void ImGuiOverlay::drawDetailsWindow() {
         }
 
         ImGui::Separator();
-        if (ImGui::Button("Close", ImVec2(100.0f, 34.0f))) {
+        if (ImGui::Button("Close Details", ImVec2(140.0f, 34.0f))) {
             m_showDetails = false;
         }
     }

@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <utility>
+#include <chrono>
 
 namespace arke::platform {
 
@@ -21,7 +22,8 @@ public:
     bool handleTouchEvent(int action, float x, float y);
 
     bool isSettingsOpen() const { return m_showSettings; }
-    void toggleSettings() { m_showSettings = !m_showSettings; }
+    void toggleSettings() { tryToggleSettings(); }
+    bool tryToggleSettings();
 
     void scanShaderPacks();
 
@@ -35,8 +37,16 @@ private:
     bool m_initialized{false};
     bool m_showSettings{false};
     bool m_showDetails{false};
-    float m_displayWidth{1920.0f};
-    float m_displayHeight{1080.0f};
+    float m_displayWidth{1600.0f};
+    float m_displayHeight{720.0f};
+
+    // Single debounced toggle timer
+    std::chrono::steady_clock::time_point m_lastToggleTime{};
+
+    // Delayed mouse release for reliable mobile tap registration
+    bool m_pendingMouseUp{false};
+    float m_pendingMouseUpX{0.0f};
+    float m_pendingMouseUpY{0.0f};
 
     // Discovered shader packs: pair of (packName, fullPath)
     std::vector<std::pair<std::string, std::string>> m_discoveredPacks;

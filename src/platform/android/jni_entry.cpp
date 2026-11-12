@@ -147,8 +147,9 @@ static void ensure_default_assets(const std::string& baseDir) {
         }
     }
 
+    // Unconditionally overwrite default final.fsh with clean ACES filmic tonemapping
     std::string fshPath = shadersDir + "/final.fsh";
-    if (access(fshPath.c_str(), F_OK) != 0) {
+    {
         FILE* fp = fopen(fshPath.c_str(), "w");
         if (fp) {
             fprintf(fp, "#version 300 es\n"
@@ -159,18 +160,29 @@ static void ensure_default_assets(const std::string& baseDir) {
                         "uniform float viewWidth;\n"
                         "uniform float viewHeight;\n"
                         "uniform float frameTimeCounter;\n"
+                        "\n"
+                        "// ACES filmic approximation\n"
+                        "vec3 ACESFilm(vec3 x) {\n"
+                        "    float a = 2.51;\n"
+                        "    float b = 0.03;\n"
+                        "    float c = 2.43;\n"
+                        "    float d = 0.59;\n"
+                        "    float e = 0.14;\n"
+                        "    return clamp((x*(a*x+b))/(x*(c*x+d)+e), 0.0, 1.0);\n"
+                        "}\n"
+                        "\n"
                         "void main() {\n"
                         "    vec4 color = texture(colortex0, texCoord);\n"
                         "    vec3 rgb = color.rgb;\n"
+                        "    // Subtle vibrant grade\n"
                         "    float luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));\n"
-                        "    rgb = mix(vec3(luma), rgb, 1.22);\n"
-                        "    rgb = pow(rgb, vec3(0.96));\n"
-                        "    rgb = (rgb - 0.5) * 1.06 + 0.5;\n"
-                        "    rgb += vec3(0.015, 0.008, 0.0) * luma;\n"
-                        "    fragColor = vec4(clamp(rgb, 0.0, 1.0), color.a);\n"
+                        "    rgb = mix(vec3(luma), rgb, 1.18);\n"
+                        "    rgb *= vec3(1.04, 1.02, 0.98);\n"
+                        "    rgb = ACESFilm(rgb);\n"
+                        "    fragColor = vec4(rgb, color.a);\n"
                         "}\n");
             fclose(fp);
-            arke::Logger::instance().info("[Setup] Created default final.fsh");
+            arke::Logger::instance().info("[Setup] Overwrote default final.fsh with ACES filmic tonemap");
         }
     }
 

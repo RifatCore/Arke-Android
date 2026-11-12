@@ -16,6 +16,116 @@
 
 namespace arke::platform {
 
+// --- BGFX-Safe Complete OpenGL ES State Guard ---
+class GLStateGuard {
+public:
+    GLint prevDrawFBO{0};
+    GLint prevReadFBO{0};
+    GLint prevProgram{0};
+    GLint prevActiveTexture{GL_TEXTURE0};
+    GLint prevTex2D[4]{0, 0, 0, 0};
+    GLint prevSampler[4]{0, 0, 0, 0};
+    GLint prevVAO{0};
+    GLint prevVBO{0};
+    GLint prevEBO{0};
+    GLint prevViewport[4]{0, 0, 0, 0};
+    GLint prevScissor[4]{0, 0, 0, 0};
+    GLboolean prevScissorTest{GL_FALSE};
+    GLboolean prevDepthTest{GL_FALSE};
+    GLboolean prevDepthMask{GL_TRUE};
+    GLboolean prevCullFace{GL_FALSE};
+    GLint prevCullMode{GL_BACK};
+    GLboolean prevBlend{GL_FALSE};
+    GLint prevBlendSrcRgb{GL_ONE};
+    GLint prevBlendDstRgb{GL_ZERO};
+    GLint prevBlendSrcAlpha{GL_ONE};
+    GLint prevBlendDstAlpha{GL_ZERO};
+    GLint prevBlendEqRgb{GL_FUNC_ADD};
+    GLint prevBlendEqAlpha{GL_FUNC_ADD};
+    GLboolean prevColorMask[4]{GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+    GLboolean prevStencilTest{GL_FALSE};
+
+    GLStateGuard() {
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFBO);
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
+        glGetIntegerv(GL_CURRENT_PROGRAM, &prevProgram);
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &prevActiveTexture);
+
+        for (int i = 0; i < 4; ++i) {
+            glActiveTexture(GL_TEXTURE0 + i);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex2D[i]);
+            glGetIntegerv(GL_SAMPLER_BINDING, &prevSampler[i]);
+        }
+        glActiveTexture(prevActiveTexture);
+
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVAO);
+        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevVBO);
+        glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &prevEBO);
+
+        glGetIntegerv(GL_VIEWPORT, prevViewport);
+        glGetIntegerv(GL_SCISSOR_BOX, prevScissor);
+        prevScissorTest = glIsEnabled(GL_SCISSOR_TEST);
+
+        prevDepthTest = glIsEnabled(GL_DEPTH_TEST);
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &prevDepthMask);
+
+        prevCullFace = glIsEnabled(GL_CULL_FACE);
+        glGetIntegerv(GL_CULL_FACE_MODE, &prevCullMode);
+
+        prevBlend = glIsEnabled(GL_BLEND);
+        glGetIntegerv(GL_BLEND_SRC_RGB, &prevBlendSrcRgb);
+        glGetIntegerv(GL_BLEND_DST_RGB, &prevBlendDstRgb);
+        glGetIntegerv(GL_BLEND_SRC_ALPHA, &prevBlendSrcAlpha);
+        glGetIntegerv(GL_BLEND_DST_ALPHA, &prevBlendDstAlpha);
+        glGetIntegerv(GL_BLEND_EQUATION_RGB, &prevBlendEqRgb);
+        glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &prevBlendEqAlpha);
+
+        glGetBooleanv(GL_COLOR_WRITEMASK, prevColorMask);
+        prevStencilTest = glIsEnabled(GL_STENCIL_TEST);
+    }
+
+    ~GLStateGuard() {
+        if (prevDrawFBO == prevReadFBO) {
+            glBindFramebuffer(GL_FRAMEBUFFER, prevDrawFBO);
+        } else {
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFBO);
+        }
+
+        glUseProgram(prevProgram);
+
+        for (int i = 0; i < 4; ++i) {
+            glActiveTexture(GL_TEXTURE0 + i);
+            glBindTexture(GL_TEXTURE_2D, prevTex2D[i]);
+            glBindSampler(i, prevSampler[i]);
+        }
+        glActiveTexture(prevActiveTexture);
+
+        glBindVertexArray(prevVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, prevVBO);
+        if (prevVAO == 0) {
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, prevEBO);
+        }
+
+        glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+        glScissor(prevScissor[0], prevScissor[1], prevScissor[2], prevScissor[3]);
+        if (prevScissorTest) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+
+        glDepthMask(prevDepthMask);
+        if (prevDepthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+
+        glCullFace(prevCullMode);
+        if (prevCullFace) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+
+        glBlendEquationSeparate(prevBlendEqRgb, prevBlendEqAlpha);
+        glBlendFuncSeparate(prevBlendSrcRgb, prevBlendDstRgb, prevBlendSrcAlpha, prevBlendDstAlpha);
+        if (prevBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+
+        glColorMask(prevColorMask[0], prevColorMask[1], prevColorMask[2], prevColorMask[3]);
+        if (prevStencilTest) glEnable(GL_STENCIL_TEST); else glDisable(GL_STENCIL_TEST);
+    }
+};
+
 // --- Post-Processing Full-Screen Pass Renderer for Mali-G57 ---
 class PostProcessRenderer {
 public:
@@ -200,16 +310,19 @@ public:
         }
 
         // Render to onscreen default FBO 0
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         glViewport(0, 0, (GLsizei)width, (GLsizei)height);
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_SCISSOR_TEST);
         glDisable(GL_CULL_FACE);
+        glDisable(GL_BLEND);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
         glUseProgram(program);
         if (u_colortex0 >= 0) {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, srcTex);
+            glBindSampler(0, 0);
             glUniform1i(u_colortex0, 0);
         }
         if (u_viewWidth >= 0) glUniform1f(u_viewWidth, width);
@@ -218,8 +331,14 @@ public:
 
         glBindVertexArray(vao);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+        // Immediate cleanup of our resources
         glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
         glUseProgram(0);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindSampler(0, 0);
     }
 };
 
@@ -227,6 +346,28 @@ static PostProcessRenderer g_postProcessRenderer;
 static auto g_lastFrameTime = std::chrono::high_resolution_clock::now();
 static double g_totalSeconds = 0.0;
 static uint32_t g_frameCount = 0;
+
+static bool g_worldRenderedThisFrame = false;
+
+static inline void checkWorldUniformName(const std::string& name) {
+    if (g_worldRenderedThisFrame) return;
+    if (name == "ViewPositionAndTime" || 
+        name == "FogAndDistanceControl" || 
+        name == "LightWorldSpaceDirection" || 
+        name == "u_view" || 
+        name == "u_proj" ||
+        name == "u_viewProj" ||
+        name == "u_modelView" ||
+        name == "u_modelViewProj" ||
+        name.find("RenderChunk") != std::string::npos ||
+        name.find("Terrain") != std::string::npos ||
+        name.find("FogAndDistance") != std::string::npos ||
+        name.find("ViewPosition") != std::string::npos ||
+        name.find("WorldPos") != std::string::npos ||
+        name.find("LightDirection") != std::string::npos) {
+        g_worldRenderedThisFrame = true;
+    }
+}
 
 static std::mutex g_uniformMutex;
 static std::unordered_map<int32_t, std::string> g_uniformLocationMap;
@@ -245,57 +386,39 @@ void onEglSwapBuffersPost(void* dpy, void* surface) {
     // Update uniform bridge
     UniformBridge::instance().updateFrame(dt, g_totalSeconds, g_frameCount);
 
-    // Save full OpenGL ES state
-    GLint prevFBO = 0;
-    GLint prevViewport[4] = {0, 0, 1920, 1080};
-    GLint prevScissor[4] = {0, 0, 1920, 1080};
-    GLboolean prevScissorTest = glIsEnabled(GL_SCISSOR_TEST);
-    GLboolean prevDepthTest = glIsEnabled(GL_DEPTH_TEST);
-    GLboolean prevCullFace = glIsEnabled(GL_CULL_FACE);
-    GLboolean prevBlend = glIsEnabled(GL_BLEND);
-    GLint prevProgram = 0;
-    GLint prevActiveTex = 0;
-    GLint prevVAO = 0;
-    GLint prevVBO = 0;
+    {
+        // Scope-bound RAII complete GL state preservation
+        GLStateGuard stateGuard;
 
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
-    glGetIntegerv(GL_VIEWPORT, prevViewport);
-    glGetIntegerv(GL_SCISSOR_BOX, prevScissor);
-    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProgram);
-    glGetIntegerv(GL_ACTIVE_TEXTURE, &prevActiveTex);
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVAO);
-    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevVBO);
+        float width = static_cast<float>(stateGuard.prevViewport[2] > 0 ? stateGuard.prevViewport[2] : 1600);
+        float height = static_cast<float>(stateGuard.prevViewport[3] > 0 ? stateGuard.prevViewport[3] : 720);
 
-    float width = static_cast<float>(prevViewport[2] > 0 ? prevViewport[2] : 1920);
-    float height = static_cast<float>(prevViewport[3] > 0 ? prevViewport[3] : 1080);
+        // 1. Render active post-processing pass ONLY if pack is active, enabled, AND world geometry was drawn this frame
+        if (g_worldRenderedThisFrame && shader::ShaderPipeline::instance().isPackLoaded() && ConfigManager::instance().get().enabled) {
+            g_postProcessRenderer.render(stateGuard.prevDrawFBO, width, height, static_cast<float>(g_totalSeconds));
+        }
 
-    // 1. Render active post-processing pass if pack is active and enabled
-    if (shader::ShaderPipeline::instance().isPackLoaded() && ConfigManager::instance().get().enabled) {
-        g_postProcessRenderer.render(prevFBO, width, height, static_cast<float>(g_totalSeconds));
+        // 2. Explicitly bind default onscreen framebuffer FBO 0 for Dear ImGui overlay
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_CULL_FACE);
+
+        ImGuiOverlay::instance().newFrame(width, height);
+        ImGuiOverlay::instance().render();
+
+        // Immediate cleanup before restoring BGFX state
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glUseProgram(0);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindSampler(0, 0);
     }
 
-    // 2. Explicitly bind default onscreen framebuffer FBO 0 for Dear ImGui overlay
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
-    glDisable(GL_SCISSOR_TEST);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_CULL_FACE);
-
-    ImGuiOverlay::instance().newFrame(width, height);
-    ImGuiOverlay::instance().render();
-
-    // 3. Restore previous OpenGL ES state
-    glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
-    glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
-    glScissor(prevScissor[0], prevScissor[1], prevScissor[2], prevScissor[3]);
-    if (prevScissorTest) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
-    if (prevDepthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
-    if (prevCullFace) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
-    if (prevBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
-    glActiveTexture(prevActiveTex);
-    glBindVertexArray(prevVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, prevVBO);
-    glUseProgram(prevProgram);
+    // Reset world rendered flag for the next frame
+    g_worldRenderedThisFrame = false;
 }
 
 void onGlShaderSourcePre(
@@ -359,6 +482,7 @@ void onGlUniformMatrix4fvPre(int32_t location, int32_t count, uint8_t transpose,
 
     if (!name.empty()) {
         UniformBridge::instance().setRenderDragonMatrix(name, value);
+        checkWorldUniformName(name);
 
         std::lock_guard<std::mutex> lock(g_uniformMutex);
         if (g_loggedUniforms.find(name) == g_loggedUniforms.end()) {
@@ -383,6 +507,7 @@ void onGlUniform4fvPre(int32_t location, int32_t count, const float* value) {
 
     if (!name.empty()) {
         UniformBridge::instance().setRenderDragonVector4(name, value);
+        checkWorldUniformName(name);
 
         std::lock_guard<std::mutex> lock(g_uniformMutex);
         if (g_loggedUniforms.find(name) == g_loggedUniforms.end()) {
