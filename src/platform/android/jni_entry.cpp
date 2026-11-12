@@ -4,6 +4,7 @@
 #include "arke/shader/pipeline.hpp"
 #include "arke/platform/android_hook.hpp"
 #include "arke/platform/imgui_overlay.hpp"
+#include "arke/platform/gles_hook.hpp"
 
 #include <thread>
 #include <chrono>
@@ -27,6 +28,7 @@ extern "C" {
 ARKE_EXPORT void ArkeReload(void) {
     arke::Logger::instance().info("[API] ArkeReload called from host/UI.");
     arke::shader::ShaderPipeline::instance().reload();
+    arke::platform::getArkeShaderState().shaderReloadRequested.store(true);
 }
 
 ARKE_EXPORT int32_t ArkeState(void) {

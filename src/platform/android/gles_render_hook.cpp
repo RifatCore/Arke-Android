@@ -127,6 +127,102 @@ public:
 };
 
 // --- Post-Processing Full-Screen Pass Renderer for Mali-G57 ---
+
+static ArkeShaderState s_arkeShaderState;
+
+ArkeShaderState& getArkeShaderState() {
+    return s_arkeShaderState;
+}
+
+static const char* getBuiltinVertexShader() {
+    return "#version 320 es\n"
+           "precision highp float;\n"
+           "layout(location = 0) in vec2 a_position;\n"
+           "layout(location = 1) in vec2 a_texcoord;\n"
+           "out vec2 texCoord;\n"
+           "void main() {\n"
+           "    texCoord = a_texcoord;\n"
+           "    gl_Position = vec4(a_position, 0.0, 1.0);\n"
+           "}\n";
+}
+
+static const char* getBuiltinFragmentShader() {
+    return "#version 320 es\n"
+           "precision highp float;\n"
+           "\n"
+           "in vec2 texCoord;\n"
+           "out vec4 fragColor;\n"
+           "\n"
+           "uniform sampler2D colortex0;\n"
+           "uniform vec2 u_resolution;\n"
+           "uniform float u_time;\n"
+           "uniform float u_saturation;\n"
+           "uniform float u_contrast;\n"
+           "uniform float u_exposure;\n"
+           "uniform float u_bloom;\n"
+           "uniform float u_warmth;\n"
+           "uniform int u_presetMode;\n"
+           "\n"
+           "vec3 acesFilm(vec3 x) {\n"
+           "    float a = 2.51;\n"
+           "    float b = 0.03;\n"
+           "    float c = 2.43;\n"
+           "    float d = 0.59;\n"
+           "    float e = 0.14;\n"
+           "    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);\n"
+           "}\n"
+           "\n"
+           "float luminance(vec3 c) {\n"
+           "    return dot(c, vec3(0.2126, 0.7152, 0.0722));\n"
+           "}\n"
+           "\n"
+           "void main() {\n"
+           "    vec2 uv = texCoord;\n"
+           "    vec4 base = texture(colortex0, uv);\n"
+           "    vec3 color = base.rgb;\n"
+           "\n"
+           "    // 9-tap Fast Mobile Bloom on bright sky/water/light pixels\n"
+           "    if (u_bloom > 0.001) {\n"
+           "        vec2 texel = 1.0 / max(u_resolution, vec2(1.0, 1.0));\n"
+           "        vec2 offset = texel * 2.5;\n"
+           "        vec3 bloomSum = vec3(0.0);\n"
+           "        float totalWeight = 0.0;\n"
+           "        for (int y = -1; y <= 1; ++y) {\n"
+           "            for (int x = -1; x <= 1; ++x) {\n"
+           "                vec2 sUV = uv + vec2(float(x), float(y)) * offset;\n"
+           "                vec3 sCol = texture(colortex0, sUV).rgb;\n"
+           "                float lum = luminance(sCol);\n"
+           "                float bright = clamp((lum - 0.55) / 0.45, 0.0, 1.0);\n"
+           "                float w = (x == 0 && y == 0) ? 0.25 : ((x == 0 || y == 0) ? 0.125 : 0.0625);\n"
+           "                bloomSum += sCol * (bright * bright) * w;\n"
+           "                totalWeight += w;\n"
+           "            }\n"
+           "        }\n"
+           "        vec3 bloomColor = bloomSum / max(totalWeight, 0.001);\n"
+           "        color += bloomColor * (u_bloom * 1.5);\n"
+           "    }\n"
+           "\n"
+           "    // Exposure scaling\n"
+           "    color *= u_exposure;\n"
+           "\n"
+           "    // Sunlight Warmth / Color temperature grading\n"
+           "    vec3 warmGrading = vec3(1.0 + u_warmth * 0.35, 1.0 + u_warmth * 0.10, 1.0 - u_warmth * 0.25);\n"
+           "    color *= warmGrading;\n"
+           "\n"
+           "    // Contrast curve around midpoint 0.5\n"
+           "    color = clamp((color - 0.5) * u_contrast + 0.5, 0.0, 4.0);\n"
+           "\n"
+           "    // Saturation adjustment\n"
+           "    float lum = luminance(color);\n"
+           "    color = mix(vec3(lum), color, u_saturation);\n"
+           "\n"
+           "    // ACES Filmic tonemapping\n"
+           "    color = acesFilm(color);\n"
+           "\n"
+           "    fragColor = vec4(clamp(color, 0.0, 1.0), base.a);\n"
+           "}\n";
+}
+
 class PostProcessRenderer {
 public:
     GLuint program{0};
@@ -141,6 +237,14 @@ public:
     GLint u_viewWidth{-1};
     GLint u_viewHeight{-1};
     GLint u_frameTimeCounter{-1};
+    GLint u_resolution{-1};
+    GLint u_time{-1};
+    GLint u_saturation{-1};
+    GLint u_contrast{-1};
+    GLint u_exposure{-1};
+    GLint u_bloom{-1};
+    GLint u_warmth{-1};
+    GLint u_presetMode{-1};
 
     void initQuad() {
         if (vao != 0) return;
@@ -183,7 +287,7 @@ public:
         GLint vsOk = 0;
         glGetShaderiv(vs, GL_COMPILE_STATUS, &vsOk);
         if (!vsOk) {
-            char log[512];
+            char log[1024];
             glGetShaderInfoLog(vs, sizeof(log), nullptr, log);
             Logger::instance().error("[PostProcessRenderer] Vertex compile error in " + passName + ": " + log);
             glDeleteShader(vs);
@@ -198,7 +302,7 @@ public:
         GLint fsOk = 0;
         glGetShaderiv(fs, GL_COMPILE_STATUS, &fsOk);
         if (!fsOk) {
-            char log[512];
+            char log[1024];
             glGetShaderInfoLog(fs, sizeof(log), nullptr, log);
             Logger::instance().error("[PostProcessRenderer] Fragment compile error in " + passName + ": " + log);
             glDeleteShader(vs);
@@ -217,7 +321,7 @@ public:
         GLint linkOk = 0;
         glGetProgramiv(program, GL_LINK_STATUS, &linkOk);
         if (!linkOk) {
-            char log[512];
+            char log[1024];
             glGetProgramInfoLog(program, sizeof(log), nullptr, log);
             Logger::instance().error("[PostProcessRenderer] Link error in " + passName + ": " + log);
             glDeleteProgram(program);
@@ -229,89 +333,47 @@ public:
         u_viewWidth = glGetUniformLocation(program, "viewWidth");
         u_viewHeight = glGetUniformLocation(program, "viewHeight");
         u_frameTimeCounter = glGetUniformLocation(program, "frameTimeCounter");
+        u_resolution = glGetUniformLocation(program, "u_resolution");
+        u_time = glGetUniformLocation(program, "u_time");
+        u_saturation = glGetUniformLocation(program, "u_saturation");
+        u_contrast = glGetUniformLocation(program, "u_contrast");
+        u_exposure = glGetUniformLocation(program, "u_exposure");
+        u_bloom = glGetUniformLocation(program, "u_bloom");
+        u_warmth = glGetUniformLocation(program, "u_warmth");
+        u_presetMode = glGetUniformLocation(program, "u_presetMode");
 
         currentCompiledPass = passName;
-        Logger::instance().info("[PostProcessRenderer] Ready active shader pass: " + passName);
+        Logger::instance().info("[PostProcessRenderer] Ready active shader program: " + passName);
         return true;
     }
 
-    void render(GLint prevFBO, float width, float height, float totalTime) {
-        const auto& passes = shader::ShaderPipeline::instance().getPasses();
-        if (passes.empty()) return;
-
-        // Find final pass or composite pass
-        const shader::CompiledPass* activePass = nullptr;
-        for (const auto& p : passes) {
-            if (p.name == "final" && !p.fragmentESSL.empty()) {
-                activePass = &p;
-                break;
-            }
-        }
-        if (!activePass) {
-            for (const auto& p : passes) {
-                if ((p.name == "composite" || p.name == "composite1") && !p.fragmentESSL.empty()) {
-                    activePass = &p;
-                    break;
-                }
-            }
-        }
-        if (!activePass) return;
-
-        // Recompile if pass changed
-        if (program == 0 || currentCompiledPass != activePass->name) {
-            std::string vsh = activePass->vertexESSL;
-            if (vsh.empty()) {
-                vsh = "#version 300 es\n"
-                      "precision highp float;\n"
-                      "layout(location = 0) in vec2 a_position;\n"
-                      "layout(location = 1) in vec2 a_texcoord;\n"
-                      "out vec2 texCoord;\n"
-                      "void main() {\n"
-                      "    texCoord = a_texcoord;\n"
-                      "    gl_Position = vec4(a_position, 0.0, 1.0);\n"
-                      "}\n";
-            }
-            if (!compileStage(vsh, activePass->fragmentESSL, activePass->name)) {
-                return;
-            }
-        }
+    void render(float width, float height, float totalTime) {
+        if (program == 0) return;
 
         initQuad();
 
-        // Determine source scene texture
-        GLuint srcTex = 0;
-        if (prevFBO != 0) {
-            GLint objType = 0;
-            glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &objType);
-            if (objType == GL_TEXTURE) {
-                GLint texName = 0;
-                glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &texName);
-                srcTex = static_cast<GLuint>(texName);
-            }
-        }
-
-        if (srcTex == 0) {
-            // FBO 0 backbuffer copy
-            if (copyTex == 0 || copyTexW != (GLsizei)width || copyTexH != (GLsizei)height) {
-                if (copyTex != 0) glDeleteTextures(1, &copyTex);
-                glGenTextures(1, &copyTex);
-                glBindTexture(GL_TEXTURE_2D, copyTex);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, (GLsizei)width, (GLsizei)height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-                copyTexW = (GLsizei)width;
-                copyTexH = (GLsizei)height;
-            }
+        // 1. Ensure copy texture matches current viewport dimensions
+        if (copyTex == 0 || copyTexW != static_cast<GLsizei>(width) || copyTexH != static_cast<GLsizei>(height)) {
+            if (copyTex != 0) glDeleteTextures(1, &copyTex);
+            glGenTextures(1, &copyTex);
             glBindTexture(GL_TEXTURE_2D, copyTex);
-            glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, (GLsizei)width, (GLsizei)height);
-            srcTex = copyTex;
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, static_cast<GLsizei>(width), static_cast<GLsizei>(height), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            copyTexW = static_cast<GLsizei>(width);
+            copyTexH = static_cast<GLsizei>(height);
         }
 
-        // Render to onscreen default FBO 0
+        // 2. Capture the rendered frame from FBO 0 into copyTex
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        glBindTexture(GL_TEXTURE_2D, copyTex);
+        glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+
+        // 3. Set render state for fullscreen post-process quad on onscreen FBO 0
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        glViewport(0, 0, (GLsizei)width, (GLsizei)height);
+        glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_SCISSOR_TEST);
         glDisable(GL_CULL_FACE);
@@ -319,15 +381,27 @@ public:
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
         glUseProgram(program);
+
         if (u_colortex0 >= 0) {
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, srcTex);
+            glBindTexture(GL_TEXTURE_2D, copyTex);
             glBindSampler(0, 0);
             glUniform1i(u_colortex0, 0);
         }
+
         if (u_viewWidth >= 0) glUniform1f(u_viewWidth, width);
         if (u_viewHeight >= 0) glUniform1f(u_viewHeight, height);
         if (u_frameTimeCounter >= 0) glUniform1f(u_frameTimeCounter, totalTime);
+
+        const auto& state = getArkeShaderState();
+        if (u_resolution >= 0) glUniform2f(u_resolution, width, height);
+        if (u_time >= 0) glUniform1f(u_time, totalTime);
+        if (u_saturation >= 0) glUniform1f(u_saturation, state.saturation);
+        if (u_contrast >= 0) glUniform1f(u_contrast, state.contrast);
+        if (u_exposure >= 0) glUniform1f(u_exposure, state.exposure);
+        if (u_bloom >= 0) glUniform1f(u_bloom, state.bloomStrength);
+        if (u_warmth >= 0) glUniform1f(u_warmth, state.warmth);
+        if (u_presetMode >= 0) glUniform1i(u_presetMode, state.presetMode);
 
         glBindVertexArray(vao);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -346,28 +420,6 @@ static PostProcessRenderer g_postProcessRenderer;
 static auto g_lastFrameTime = std::chrono::high_resolution_clock::now();
 static double g_totalSeconds = 0.0;
 static uint32_t g_frameCount = 0;
-
-static bool g_worldRenderedThisFrame = false;
-
-static inline void checkWorldUniformName(const std::string& name) {
-    if (g_worldRenderedThisFrame) return;
-    if (name == "ViewPositionAndTime" || 
-        name == "FogAndDistanceControl" || 
-        name == "LightWorldSpaceDirection" || 
-        name == "u_view" || 
-        name == "u_proj" ||
-        name == "u_viewProj" ||
-        name == "u_modelView" ||
-        name == "u_modelViewProj" ||
-        name.find("RenderChunk") != std::string::npos ||
-        name.find("Terrain") != std::string::npos ||
-        name.find("FogAndDistance") != std::string::npos ||
-        name.find("ViewPosition") != std::string::npos ||
-        name.find("WorldPos") != std::string::npos ||
-        name.find("LightDirection") != std::string::npos) {
-        g_worldRenderedThisFrame = true;
-    }
-}
 
 static std::mutex g_uniformMutex;
 static std::unordered_map<int32_t, std::string> g_uniformLocationMap;
@@ -393,9 +445,51 @@ void onEglSwapBuffersPost(void* dpy, void* surface) {
         float width = static_cast<float>(stateGuard.prevViewport[2] > 0 ? stateGuard.prevViewport[2] : 1600);
         float height = static_cast<float>(stateGuard.prevViewport[3] > 0 ? stateGuard.prevViewport[3] : 720);
 
-        // 1. Render active post-processing pass ONLY if pack is active, enabled, AND world geometry was drawn this frame
-        if (g_worldRenderedThisFrame && shader::ShaderPipeline::instance().isPackLoaded() && ConfigManager::instance().get().enabled) {
-            g_postProcessRenderer.render(stateGuard.prevDrawFBO, width, height, static_cast<float>(g_totalSeconds));
+        auto& state = getArkeShaderState();
+        bool reloadRequested = state.shaderReloadRequested.exchange(false);
+
+        // Check if shaders need compilation/recompilation on this valid render-thread context
+        if (reloadRequested || g_postProcessRenderer.program == 0) {
+            if (state.presetMode == 3) {
+                // Custom Shader Pack from Disk
+                const auto& passes = shader::ShaderPipeline::instance().getPasses();
+                const shader::CompiledPass* activePass = nullptr;
+                for (const auto& p : passes) {
+                    if (p.name == "final" && !p.fragmentESSL.empty()) {
+                        activePass = &p;
+                        break;
+                    }
+                }
+                if (!activePass) {
+                    for (const auto& p : passes) {
+                        if ((p.name == "composite" || p.name == "composite1") && !p.fragmentESSL.empty()) {
+                            activePass = &p;
+                            break;
+                        }
+                    }
+                }
+
+                bool compiled = false;
+                if (activePass) {
+                    std::string vsh = activePass->vertexESSL.empty() ? getBuiltinVertexShader() : activePass->vertexESSL;
+                    compiled = g_postProcessRenderer.compileStage(vsh, activePass->fragmentESSL, activePass->name);
+                }
+                if (!compiled) {
+                    Logger::instance().warn("[PostProcessRenderer] Custom pack stage failed or missing; using enhanced ESSL 3.20 preset shader");
+                    g_postProcessRenderer.compileStage(getBuiltinVertexShader(), getBuiltinFragmentShader(), "Builtin_Custom_Fallback");
+                }
+            } else {
+                std::string presetName = (state.presetMode == 0) ? "Builtin_Vibrant_ACES" :
+                                         (state.presetMode == 1) ? "Builtin_Golden_Hour" :
+                                                                   "Builtin_Cinematic_Bloom";
+                g_postProcessRenderer.compileStage(getBuiltinVertexShader(), getBuiltinFragmentShader(), presetName);
+            }
+        }
+
+        // 1. Render active post-processing pass ONLY if enabled AND past initial splash threshold (g_frameCount > 150)
+        bool shadersEnabled = state.shadersEnabled && ConfigManager::instance().get().enabled;
+        if (g_frameCount > 150 && shadersEnabled) {
+            g_postProcessRenderer.render(width, height, static_cast<float>(g_totalSeconds));
         }
 
         // 2. Explicitly bind default onscreen framebuffer FBO 0 for Dear ImGui overlay
@@ -416,9 +510,6 @@ void onEglSwapBuffersPost(void* dpy, void* surface) {
         glBindTexture(GL_TEXTURE_2D, 0);
         glBindSampler(0, 0);
     }
-
-    // Reset world rendered flag for the next frame
-    g_worldRenderedThisFrame = false;
 }
 
 void onGlShaderSourcePre(
@@ -482,7 +573,6 @@ void onGlUniformMatrix4fvPre(int32_t location, int32_t count, uint8_t transpose,
 
     if (!name.empty()) {
         UniformBridge::instance().setRenderDragonMatrix(name, value);
-        checkWorldUniformName(name);
 
         std::lock_guard<std::mutex> lock(g_uniformMutex);
         if (g_loggedUniforms.find(name) == g_loggedUniforms.end()) {
@@ -507,7 +597,6 @@ void onGlUniform4fvPre(int32_t location, int32_t count, const float* value) {
 
     if (!name.empty()) {
         UniformBridge::instance().setRenderDragonVector4(name, value);
-        checkWorldUniformName(name);
 
         std::lock_guard<std::mutex> lock(g_uniformMutex);
         if (g_loggedUniforms.find(name) == g_loggedUniforms.end()) {

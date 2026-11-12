@@ -1,4 +1,5 @@
 #include "arke/platform/imgui_overlay.hpp"
+#include "arke/platform/gles_hook.hpp"
 #include "arke/shader/pipeline.hpp"
 #include "arke/config.hpp"
 #include "arke/logger.hpp"
@@ -16,6 +17,28 @@
 extern "C" void ArkeReload(void);
 
 namespace arke::platform {
+
+static constexpr float LAUNCHER_X = 16.0f;
+static constexpr float LAUNCHER_Y = 16.0f;
+static constexpr float LAUNCHER_W = 120.0f;
+static constexpr float LAUNCHER_H = 48.0f;
+
+// Touch bounds for launcher button: [12, 142] x [12, 66]
+static constexpr float LAUNCHER_TOUCH_MIN_X = 12.0f;
+static constexpr float LAUNCHER_TOUCH_MAX_X = 142.0f;
+static constexpr float LAUNCHER_TOUCH_MIN_Y = 12.0f;
+static constexpr float LAUNCHER_TOUCH_MAX_Y = 66.0f;
+
+static constexpr float SETTINGS_X = 16.0f;
+static constexpr float SETTINGS_Y = 76.0f;
+static constexpr float SETTINGS_W = 560.0f;
+static constexpr float SETTINGS_H = 480.0f;
+
+// Touch bounds for settings window: [16, 576] x [76, 556]
+static constexpr float SETTINGS_TOUCH_MIN_X = SETTINGS_X;
+static constexpr float SETTINGS_TOUCH_MAX_X = SETTINGS_X + SETTINGS_W;
+static constexpr float SETTINGS_TOUCH_MIN_Y = SETTINGS_Y;
+static constexpr float SETTINGS_TOUCH_MAX_Y = SETTINGS_Y + SETTINGS_H;
 
 ImGuiOverlay& ImGuiOverlay::instance() {
     static ImGuiOverlay s_instance;
@@ -171,18 +194,20 @@ bool ImGuiOverlay::handleTouchEvent(int action, float x, float y) {
 
     // Hitbox definitions:
     // Top-left Arke launcher button: pos (16, 16), size (120, 48) -> strictly [12, 142] x [12, 66] (NEVER includes (0, 0)!)
-    bool insideLauncher = (x >= 12.0f && x <= 142.0f && y >= 12.0f && y <= 66.0f);
+    bool insideLauncher = (x >= LAUNCHER_TOUCH_MIN_X && x <= LAUNCHER_TOUCH_MAX_X &&
+                           y >= LAUNCHER_TOUCH_MIN_Y && y <= LAUNCHER_TOUCH_MAX_Y);
 
-    // Arke Settings window: pos (16, 76), size (540, 420) -> strictly [16, 556] x [76, 496]
-    bool insideSettings = (x >= 16.0f && x <= 556.0f && y >= 76.0f && y <= 496.0f);
+    // Arke Settings window: pos (16, 76), size (560, 480) -> strictly [16, 576] x [76, 556]
+    bool insideSettings = (x >= SETTINGS_TOUCH_MIN_X && x <= SETTINGS_TOUCH_MAX_X &&
+                           y >= SETTINGS_TOUCH_MIN_Y && y <= SETTINGS_TOUCH_MAX_Y);
 
     bool consumed = false;
 
     if (!m_showSettings) {
         // --- MENU IS CLOSED ---
-        // ONLY consume the touch event if x is in [12, 142] AND y is in [12, 66].
+        // ONLY consume the touch event if inside launcher button.
         // On ACTION_DOWN inside [12, 142] x [12, 66], call tryToggleSettings().
-        // For ALL other coordinates on screen (x > 142 || y > 66), do NOT consume the event—let Minecraft receive 100% of touches!
+        // For ALL other coordinates on screen, do NOT consume the event—let Minecraft receive 100% of touches!
         if (insideLauncher) {
             if (isDown) {
                 tryToggleSettings();
@@ -193,7 +218,7 @@ bool ImGuiOverlay::handleTouchEvent(int action, float x, float y) {
         }
     } else {
         // --- MENU IS OPEN ---
-        // 1. If ACTION_DOWN is inside launcher button [12, 142] x [12, 66], toggle m_showSettings to false (close menu) and consume.
+        // 1. If ACTION_DOWN is inside launcher button, toggle m_showSettings to false (close menu) and consume.
         if (insideLauncher) {
             if (isDown) {
                 m_showSettings = false;
@@ -202,7 +227,7 @@ bool ImGuiOverlay::handleTouchEvent(int action, float x, float y) {
             }
             consumed = true;
         }
-        // 2. If touch is inside Arke Settings window [16, 556] x [76, 496]:
+        // 2. If touch is inside Arke Settings window:
         // Do NOT toggle m_showSettings! Forward the real (x, y) to ImGui so widgets work, and consume.
         else if (insideSettings) {
             io.AddMousePosEvent(x, y);
@@ -266,7 +291,7 @@ void ImGuiOverlay::newFrame(float width, float height) {
 }
 
 void ImGuiOverlay::drawLauncherButton() {
-    ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(LAUNCHER_X, LAUNCHER_Y), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.75f);
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
@@ -280,7 +305,7 @@ void ImGuiOverlay::drawLauncherButton() {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.55f, 0.95f, 0.95f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.10f, 0.35f, 0.75f, 1.0f));
 
-        if (ImGui::Button("Arke##arke_launcher", ImVec2(120.0f, 48.0f))) {
+        if (ImGui::Button("Arke##arke_launcher", ImVec2(LAUNCHER_W, LAUNCHER_H))) {
             tryToggleSettings();
         }
 
@@ -290,8 +315,8 @@ void ImGuiOverlay::drawLauncherButton() {
 }
 
 void ImGuiOverlay::drawSettingsWindow() {
-    ImGui::SetNextWindowPos(ImVec2(16.0f, 76.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(540.0f, 420.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(SETTINGS_X, SETTINGS_Y), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(SETTINGS_W, SETTINGS_H), ImGuiCond_Always);
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
 
@@ -300,62 +325,96 @@ void ImGuiOverlay::drawSettingsWindow() {
         ImGui::Text("Minecraft Bedrock 26.60 | Mali-G57 GLES 3.2");
         ImGui::Separator();
 
-        std::string currentPack = shader::ShaderPipeline::instance().getCurrentPackName();
-        if (currentPack.empty()) currentPack = "None";
-        ImGui::Text("Active Pack: %s", currentPack.c_str());
-        ImGui::Text("Loaded Passes: %zu", shader::ShaderPipeline::instance().getPasses().size());
-
-        if (ImGui::Button("Rescan Packs", ImVec2(140.0f, 36.0f))) {
-            scanShaderPacks();
-        }
-
-        if (m_discoveredPacks.empty()) {
-            scanShaderPacks();
-        }
-
-        if (ImGui::BeginCombo("Shader Pack", m_selectedPackName.c_str())) {
-            for (const auto& pack : m_discoveredPacks) {
-                bool isSelected = (m_selectedPackName == pack.first);
-                if (ImGui::Selectable(pack.first.c_str(), isSelected)) {
-                    m_selectedPackName = pack.first;
-                    m_selectedPackPath = pack.second;
-                }
-                if (isSelected) {
-                    ImGui::SetItemDefaultFocus();
-                }
-            }
-            ImGui::EndCombo();
-        }
-
-        if (ImGui::Button("Apply & Load Pack", ImVec2(170.0f, 38.0f))) {
-            if (!m_selectedPackPath.empty()) {
-                shader::ShaderPipeline::instance().loadPack(m_selectedPackPath);
-                auto& cfg = ConfigManager::instance().get();
-                cfg.shaderpack = m_selectedPackName;
-                ConfigManager::instance().save();
-            }
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Reload Shaders", ImVec2(160.0f, 38.0f))) {
-            ArkeReload();
-        }
-
-        ImGui::Separator();
+        auto& shaderState = getArkeShaderState();
         auto& cfg = ConfigManager::instance().get();
-        if (ImGui::Checkbox("Enable Custom Shaders", &cfg.enabled)) {
+
+        // Checkbox: Enable Shaders
+        bool enabled = shaderState.shadersEnabled && cfg.enabled;
+        if (ImGui::Checkbox("Enable Shaders", &enabled)) {
+            shaderState.shadersEnabled = enabled;
+            cfg.enabled = enabled;
             ConfigManager::instance().save();
+            Logger::instance().info("[Settings] Shaders toggled: " + std::string(enabled ? "ON" : "OFF"));
         }
+
+        // Shader Mode Preset Selector
+        const char* const presetNames[] = {
+            "Vibrant ACES Filmic",
+            "Warm Golden Hour & Soft Shadows",
+            "Cinematic High-Contrast & Bloom",
+            "Custom Shader Pack from Disk"
+        };
+        int currentPreset = shaderState.presetMode;
+        if (ImGui::Combo("Shader Mode", &currentPreset, presetNames, IM_ARRAYSIZE(presetNames))) {
+            shaderState.applyPreset(currentPreset);
+            Logger::instance().info("[Settings] Preset mode changed to: " + std::string(presetNames[currentPreset]));
+        }
+
+        // Live Real-Time Uniform Sliders
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f), "Live Shader Grading:");
+        ImGui::SliderFloat("Saturation", &shaderState.saturation, 0.5f, 2.5f, "%.2f");
+        ImGui::SliderFloat("Contrast", &shaderState.contrast, 0.8f, 1.8f, "%.2f");
+        ImGui::SliderFloat("Exposure", &shaderState.exposure, 0.5f, 2.0f, "%.2f");
+        ImGui::SliderFloat("Bloom Strength", &shaderState.bloomStrength, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Sunlight Warmth", &shaderState.warmth, -0.5f, 0.8f, "%.2f");
 
         if (ImGui::SliderFloat("Shadow Distance", &cfg.shadowDistance, 32.0f, 512.0f, "%.0f blocks")) {
             ConfigManager::instance().save();
         }
 
+        // Custom Pack selector (if in Custom Pack mode)
+        if (shaderState.presetMode == 3) {
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.5f, 1.0f), "Custom Shader Pack:");
+
+            std::string currentPack = shader::ShaderPipeline::instance().getCurrentPackName();
+            if (currentPack.empty()) currentPack = "None";
+            ImGui::Text("Active: %s (%zu passes)", currentPack.c_str(), shader::ShaderPipeline::instance().getPasses().size());
+
+            if (m_discoveredPacks.empty()) {
+                scanShaderPacks();
+            }
+
+            if (ImGui::BeginCombo("Pack", m_selectedPackName.c_str())) {
+                for (const auto& pack : m_discoveredPacks) {
+                    bool isSelected = (m_selectedPackName == pack.first);
+                    if (ImGui::Selectable(pack.first.c_str(), isSelected)) {
+                        m_selectedPackName = pack.first;
+                        m_selectedPackPath = pack.second;
+                    }
+                    if (isSelected) {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+
+            if (ImGui::Button("Rescan", ImVec2(100.0f, 36.0f))) {
+                scanShaderPacks();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Apply & Load Pack", ImVec2(170.0f, 36.0f))) {
+                if (!m_selectedPackPath.empty()) {
+                    shader::ShaderPipeline::instance().loadPack(m_selectedPackPath);
+                    cfg.shaderpack = m_selectedPackName;
+                    ConfigManager::instance().save();
+                    shaderState.shaderReloadRequested.store(true);
+                    Logger::instance().info("[Settings] Applied shader pack: " + m_selectedPackName);
+                }
+            }
+        }
+
         ImGui::Separator();
-        if (ImGui::Button("Pack Details...", ImVec2(150.0f, 36.0f))) {
+        if (ImGui::Button("Reload Shaders", ImVec2(150.0f, 38.0f))) {
+            ArkeReload();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Pack Details...", ImVec2(150.0f, 38.0f))) {
             m_showDetails = !m_showDetails;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Close Window", ImVec2(150.0f, 36.0f))) {
+        if (ImGui::Button("Close Window", ImVec2(140.0f, 38.0f))) {
             m_showSettings = false;
             m_showDetails = false;
             Logger::instance().info("[ImGuiOverlay] Settings closed via Close Window button");
