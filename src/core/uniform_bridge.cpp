@@ -194,10 +194,7 @@ std::string UniformBridge::generateGLSLUniformBlock() const {
        << "#define modelViewMatrix gbufferModelView\n"
        << "#define projectionMatrix gbufferProjection\n"
        << "#define modelViewMatrixInverse gbufferModelViewInverse\n"
-       << "#define projectionMatrixInverse gbufferProjectionInverse\n"
-       << "#define viewWidth (viewWidthHeight.x)\n"
-       << "#define viewHeight (viewWidthHeight.y)\n"
-       << "#define aspectRatio (viewWidthHeight.x / viewWidthHeight.y)\n";
+       << "#define projectionMatrixInverse gbufferProjectionInverse\n";
     return ss.str();
 }
 

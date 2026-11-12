@@ -42,6 +42,7 @@ public:
     bool parseProperties(const std::string& content);
     bool parseDimensionProperties(const std::string& content);
     bool parseEntityProperties(const std::string& content);
+    bool parseConfigGlsl(const std::string& content);
 
     const std::map<std::string, std::string>& getProperties() const { return m_properties; }
     const std::map<int32_t, std::string>& getBlockMappings() const { return m_blockMappings; }

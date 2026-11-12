@@ -78,6 +78,24 @@ bool PropertiesParser::parseEntityProperties(const std::string& content) {
     return parseProperties(content);
 }
 
+bool PropertiesParser::parseConfigGlsl(const std::string& content) {
+    std::istringstream stream(content);
+    std::string line;
+    while (std::getline(stream, line)) {
+        std::string trimmed = trimString(line);
+        if (trimmed.rfind("#define", 0) == 0) {
+            std::istringstream iss(trimmed.substr(7));
+            std::string name, val;
+            iss >> name >> val;
+            if (!name.empty()) {
+                m_features.insert(name);
+                m_properties[name] = val.empty() ? "1" : val;
+            }
+        }
+    }
+    return true;
+}
+
 std::optional<std::string> PropertiesParser::getProperty(const std::string& key) const {
     auto it = m_properties.find(key);
     if (it != m_properties.end()) {

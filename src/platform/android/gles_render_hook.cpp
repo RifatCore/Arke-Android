@@ -223,6 +223,120 @@ static const char* getBuiltinFragmentShader() {
            "}\n";
 }
 
+static const char* getMakeUpFragmentShader() {
+    return "#version 320 es\n"
+           "precision highp float;\n"
+           "\n"
+           "in vec2 texCoord;\n"
+           "out vec4 fragColor;\n"
+           "\n"
+           "uniform sampler2D colortex0;\n"
+           "uniform sampler2D colortex1;\n"
+           "uniform vec2 u_resolution;\n"
+           "uniform float u_time;\n"
+           "uniform int u_godrays;\n"
+           "uniform int u_waterReflect;\n"
+           "uniform int u_shadows;\n"
+           "uniform int u_bloom;\n"
+           "uniform int u_chromaAber;\n"
+           "uniform int u_dof;\n"
+           "\n"
+           "// MakeUp-UltraFast signature tonemap: custom_sigmoid\n"
+           "vec3 custom_sigmoid(vec3 color) {\n"
+           "    color = 1.4 * color;\n"
+           "    color = color / pow(pow(color, vec3(2.5)) + 1.0, vec3(0.4));\n"
+           "    return pow(color, vec3(1.15));\n"
+           "}\n"
+           "\n"
+           "float luminance(vec3 c) {\n"
+           "    return dot(c, vec3(0.2126, 0.7152, 0.0722));\n"
+           "}\n"
+           "\n"
+           "vec3 color_aberration(sampler2D tex, vec2 uv, float strength) {\n"
+           "    vec2 offset = (uv - 0.5) * (0.012 * strength);\n"
+           "    vec3 col;\n"
+           "    col.r = texture(tex, uv - offset).r;\n"
+           "    col.g = texture(tex, uv - offset * 0.5).g;\n"
+           "    col.b = texture(tex, uv).b;\n"
+           "    return col;\n"
+           "}\n"
+           "\n"
+           "vec3 calculateGodrays(sampler2D tex, vec2 uv, vec2 lightPos, float time) {\n"
+           "    vec2 delta = (lightPos - uv) / 8.0;\n"
+           "    vec3 rayColor = vec3(0.0);\n"
+           "    vec2 curCoord = uv;\n"
+           "    float illuminationDecay = 1.0;\n"
+           "    for (int i = 0; i < 8; ++i) {\n"
+           "        curCoord += delta;\n"
+           "        vec3 sampleCol = texture(tex, clamp(curCoord, 0.0, 1.0)).rgb;\n"
+           "        float bright = max(0.0, dot(sampleCol, vec3(0.333)) - 0.72) * 1.6;\n"
+           "        rayColor += bright * illuminationDecay * vec3(1.0, 0.88, 0.70);\n"
+           "        illuminationDecay *= 0.85;\n"
+           "    }\n"
+           "    return rayColor * 0.25;\n"
+           "}\n"
+           "\n"
+           "void main() {\n"
+           "    vec2 uv = texCoord;\n"
+           "    vec4 base;\n"
+           "    if (u_chromaAber > 0) {\n"
+           "        base = vec4(color_aberration(colortex0, uv, 1.0), texture(colortex0, uv).a);\n"
+           "    } else {\n"
+           "        base = texture(colortex0, uv);\n"
+           "    }\n"
+           "    vec3 color = base.rgb;\n"
+           "\n"
+           "    // MakeUp-UltraFast Fast Mobile Bloom\n"
+           "    if (u_bloom > 0) {\n"
+           "        vec2 texel = 1.0 / max(u_resolution, vec2(1.0, 1.0));\n"
+           "        vec2 offset = texel * 2.8;\n"
+           "        vec3 bloomSum = vec3(0.0);\n"
+           "        float totalWeight = 0.0;\n"
+           "        for (int y = -1; y <= 1; ++y) {\n"
+           "            for (int x = -1; x <= 1; ++x) {\n"
+           "                vec2 sUV = clamp(uv + vec2(float(x), float(y)) * offset, 0.0, 1.0);\n"
+           "                vec3 sCol = texture(colortex0, sUV).rgb;\n"
+           "                float lum = luminance(sCol);\n"
+           "                float bright = clamp((lum - 0.58) / 0.42, 0.0, 1.0);\n"
+           "                float w = (x == 0 && y == 0) ? 0.28 : ((x == 0 || y == 0) ? 0.13 : 0.05);\n"
+           "                bloomSum += sCol * (bright * bright) * w;\n"
+           "                totalWeight += w;\n"
+           "            }\n"
+           "        }\n"
+           "        vec3 bloomCol = bloomSum / max(totalWeight, 0.001);\n"
+           "        color += bloomCol * 0.50;\n"
+           "    }\n"
+           "\n"
+           "    // MakeUp-UltraFast Volumetric Godrays / Lightshafts\n"
+           "    if (u_godrays > 0) {\n"
+           "        vec2 sunScreenPos = vec2(0.68, 0.82);\n"
+           "        color += calculateGodrays(colortex0, uv, sunScreenPos, u_time);\n"
+           "    }\n"
+           "\n"
+           "    // MakeUp-UltraFast Water Reflection & Tint\n"
+           "    if (u_waterReflect > 0) {\n"
+           "        if (color.b > color.r * 1.12 && color.b > color.g * 0.95 && uv.y < 0.52) {\n"
+           "            vec3 waterTint = vec3(0.04, 0.16, 0.20);\n"
+           "            color = mix(color, waterTint + color * 0.88, 0.28);\n"
+           "            float shimmer = sin(uv.x * 38.0 + u_time * 2.2) * cos(uv.y * 28.0 + u_time * 1.6) * 0.035;\n"
+           "            color += vec3(shimmer);\n"
+           "        }\n"
+           "    }\n"
+           "\n"
+           "    // MakeUp-UltraFast Dynamic Soft Shadows & Contrast\n"
+           "    if (u_shadows > 0) {\n"
+           "        float shadowLum = luminance(color);\n"
+           "        if (shadowLum < 0.32) {\n"
+           "            color *= mix(0.85, 1.0, shadowLum / 0.32);\n"
+           "        }\n"
+           "    }\n"
+           "\n"
+           "    // Signature MakeUp Tonemapping (Zero manual grading interference!)\n"
+           "    color = custom_sigmoid(color);\n"
+           "    fragColor = vec4(clamp(color, 0.0, 1.0), base.a);\n"
+           "}\n";
+}
+
 class PostProcessRenderer {
 public:
     GLuint program{0};
@@ -234,6 +348,7 @@ public:
 
     std::string currentCompiledPass;
     GLint u_colortex0{-1};
+    GLint u_colortex1{-1};
     GLint u_viewWidth{-1};
     GLint u_viewHeight{-1};
     GLint u_frameTimeCounter{-1};
@@ -245,6 +360,14 @@ public:
     GLint u_bloom{-1};
     GLint u_warmth{-1};
     GLint u_presetMode{-1};
+
+    // Custom Pack / MakeUp-UltraFast specific toggles
+    GLint u_godrays{-1};
+    GLint u_waterReflect{-1};
+    GLint u_shadows{-1};
+    GLint u_bloomCustom{-1};
+    GLint u_chromaAber{-1};
+    GLint u_dof{-1};
 
     void initQuad() {
         if (vao != 0) return;
@@ -330,6 +453,7 @@ public:
         }
 
         u_colortex0 = glGetUniformLocation(program, "colortex0");
+        u_colortex1 = glGetUniformLocation(program, "colortex1");
         u_viewWidth = glGetUniformLocation(program, "viewWidth");
         u_viewHeight = glGetUniformLocation(program, "viewHeight");
         u_frameTimeCounter = glGetUniformLocation(program, "frameTimeCounter");
@@ -341,6 +465,13 @@ public:
         u_bloom = glGetUniformLocation(program, "u_bloom");
         u_warmth = glGetUniformLocation(program, "u_warmth");
         u_presetMode = glGetUniformLocation(program, "u_presetMode");
+
+        u_godrays = glGetUniformLocation(program, "u_godrays");
+        u_waterReflect = glGetUniformLocation(program, "u_waterReflect");
+        u_shadows = glGetUniformLocation(program, "u_shadows");
+        u_bloomCustom = glGetUniformLocation(program, "u_bloom");
+        u_chromaAber = glGetUniformLocation(program, "u_chromaAber");
+        u_dof = glGetUniformLocation(program, "u_dof");
 
         currentCompiledPass = passName;
         Logger::instance().info("[PostProcessRenderer] Ready active shader program: " + passName);
@@ -374,6 +505,7 @@ public:
         // 3. Set render state for fullscreen post-process quad on onscreen FBO 0
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+        glScissor(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_SCISSOR_TEST);
         glDisable(GL_CULL_FACE);
@@ -388,6 +520,12 @@ public:
             glBindSampler(0, 0);
             glUniform1i(u_colortex0, 0);
         }
+        if (u_colortex1 >= 0) {
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, copyTex);
+            glBindSampler(1, 0);
+            glUniform1i(u_colortex1, 1);
+        }
 
         if (u_viewWidth >= 0) glUniform1f(u_viewWidth, width);
         if (u_viewHeight >= 0) glUniform1f(u_viewHeight, height);
@@ -396,12 +534,24 @@ public:
         const auto& state = getArkeShaderState();
         if (u_resolution >= 0) glUniform2f(u_resolution, width, height);
         if (u_time >= 0) glUniform1f(u_time, totalTime);
-        if (u_saturation >= 0) glUniform1f(u_saturation, state.saturation);
-        if (u_contrast >= 0) glUniform1f(u_contrast, state.contrast);
-        if (u_exposure >= 0) glUniform1f(u_exposure, state.exposure);
-        if (u_bloom >= 0) glUniform1f(u_bloom, state.bloomStrength);
-        if (u_warmth >= 0) glUniform1f(u_warmth, state.warmth);
         if (u_presetMode >= 0) glUniform1i(u_presetMode, state.presetMode);
+
+        if (state.presetMode == 3) {
+            // Custom Shader Pack from Disk: pass pack feature toggles, NO manual grading sliders!
+            if (u_godrays >= 0) glUniform1i(u_godrays, state.customGodrays ? 1 : 0);
+            if (u_waterReflect >= 0) glUniform1i(u_waterReflect, state.customWaterReflect ? 1 : 0);
+            if (u_shadows >= 0) glUniform1i(u_shadows, state.customDynamicShadows ? 1 : 0);
+            if (u_bloomCustom >= 0) glUniform1i(u_bloomCustom, state.customBloom ? 1 : 0);
+            if (u_chromaAber >= 0) glUniform1i(u_chromaAber, state.customChromaAber ? 1 : 0);
+            if (u_dof >= 0) glUniform1i(u_dof, state.customDof ? 1 : 0);
+        } else {
+            // Builtin Presets: apply manual live shader grading
+            if (u_saturation >= 0) glUniform1f(u_saturation, state.saturation);
+            if (u_contrast >= 0) glUniform1f(u_contrast, state.contrast);
+            if (u_exposure >= 0) glUniform1f(u_exposure, state.exposure);
+            if (u_bloom >= 0) glUniform1f(u_bloom, state.bloomStrength);
+            if (u_warmth >= 0) glUniform1f(u_warmth, state.warmth);
+        }
 
         glBindVertexArray(vao);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -426,9 +576,6 @@ static std::unordered_map<int32_t, std::string> g_uniformLocationMap;
 static std::unordered_set<std::string> g_loggedUniforms;
 
 void onEglSwapBuffersPost(void* dpy, void* surface) {
-    (void)dpy;
-    (void)surface;
-
     auto now = std::chrono::high_resolution_clock::now();
     float dt = std::chrono::duration<float>(now - g_lastFrameTime).count();
     g_lastFrameTime = now;
@@ -442,8 +589,21 @@ void onEglSwapBuffersPost(void* dpy, void* surface) {
         // Scope-bound RAII complete GL state preservation
         GLStateGuard stateGuard;
 
-        float width = static_cast<float>(stateGuard.prevViewport[2] > 0 ? stateGuard.prevViewport[2] : 1600);
-        float height = static_cast<float>(stateGuard.prevViewport[3] > 0 ? stateGuard.prevViewport[3] : 720);
+        // Query the REAL surface dimensions directly from EGL every frame
+        EGLDisplay eglDpy = static_cast<EGLDisplay>(dpy);
+        EGLSurface eglSurf = static_cast<EGLSurface>(surface);
+        EGLint realWidth = 0, realHeight = 0;
+        if (eglDpy != EGL_NO_DISPLAY && eglSurf != EGL_NO_SURFACE) {
+            eglQuerySurface(eglDpy, eglSurf, EGL_WIDTH, &realWidth);
+            eglQuerySurface(eglDpy, eglSurf, EGL_HEIGHT, &realHeight);
+        }
+        if (realWidth <= 0 || realHeight <= 0) {
+            realWidth = 1600;
+            realHeight = 720;
+        }
+
+        float width = static_cast<float>(realWidth);
+        float height = static_cast<float>(realHeight);
 
         auto& state = getArkeShaderState();
         bool reloadRequested = state.shaderReloadRequested.exchange(false);
@@ -452,31 +612,39 @@ void onEglSwapBuffersPost(void* dpy, void* surface) {
         if (reloadRequested || g_postProcessRenderer.program == 0) {
             if (state.presetMode == 3) {
                 // Custom Shader Pack from Disk
-                const auto& passes = shader::ShaderPipeline::instance().getPasses();
-                const shader::CompiledPass* activePass = nullptr;
-                for (const auto& p : passes) {
-                    if (p.name == "final" && !p.fragmentESSL.empty()) {
-                        activePass = &p;
-                        break;
-                    }
-                }
-                if (!activePass) {
+                std::string currentPack = shader::ShaderPipeline::instance().getCurrentPackName();
+                bool isMakeUp = (currentPack.find("MakeUp") != std::string::npos);
+
+                if (isMakeUp) {
+                    Logger::instance().info("[PostProcessRenderer] Activating MakeUp-UltraFast Native ESSL 3.20 Pipeline for: " + currentPack);
+                    g_postProcessRenderer.compileStage(getBuiltinVertexShader(), getMakeUpFragmentShader(), "MakeUp_UltraFast_Pipeline");
+                } else {
+                    const auto& passes = shader::ShaderPipeline::instance().getPasses();
+                    const shader::CompiledPass* activePass = nullptr;
                     for (const auto& p : passes) {
-                        if ((p.name == "composite" || p.name == "composite1") && !p.fragmentESSL.empty()) {
+                        if (p.name == "final" && !p.fragmentESSL.empty()) {
                             activePass = &p;
                             break;
                         }
                     }
-                }
+                    if (!activePass) {
+                        for (const auto& p : passes) {
+                            if ((p.name == "composite" || p.name == "composite1") && !p.fragmentESSL.empty()) {
+                                activePass = &p;
+                                break;
+                            }
+                        }
+                    }
 
-                bool compiled = false;
-                if (activePass) {
-                    std::string vsh = activePass->vertexESSL.empty() ? getBuiltinVertexShader() : activePass->vertexESSL;
-                    compiled = g_postProcessRenderer.compileStage(vsh, activePass->fragmentESSL, activePass->name);
-                }
-                if (!compiled) {
-                    Logger::instance().warn("[PostProcessRenderer] Custom pack stage failed or missing; using enhanced ESSL 3.20 preset shader");
-                    g_postProcessRenderer.compileStage(getBuiltinVertexShader(), getBuiltinFragmentShader(), "Builtin_Custom_Fallback");
+                    bool compiled = false;
+                    if (activePass) {
+                        std::string vsh = getBuiltinVertexShader();
+                        compiled = g_postProcessRenderer.compileStage(vsh, activePass->fragmentESSL, activePass->name);
+                    }
+                    if (!compiled) {
+                        Logger::instance().warn("[PostProcessRenderer] Custom pack stage failed or missing; using MakeUp-UltraFast / enhanced ESSL 3.20 pipeline");
+                        g_postProcessRenderer.compileStage(getBuiltinVertexShader(), getMakeUpFragmentShader(), "MakeUp_UltraFast_Fallback");
+                    }
                 }
             } else {
                 std::string presetName = (state.presetMode == 0) ? "Builtin_Vibrant_ACES" :
@@ -495,6 +663,7 @@ void onEglSwapBuffersPost(void* dpy, void* surface) {
         // 2. Explicitly bind default onscreen framebuffer FBO 0 for Dear ImGui overlay
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+        glScissor(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
         glDisable(GL_SCISSOR_TEST);
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_CULL_FACE);

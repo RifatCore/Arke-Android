@@ -126,13 +126,25 @@ std::string Preprocessor::processInternal(const std::string& source, const std::
 
         // Handle #define dynamically
         if (trimmed.rfind("#define", 0) == 0) {
-            std::istringstream iss(trimmed.substr(7));
+            std::string rest = trim(trimmed.substr(7));
+            size_t nameEnd = rest.find_first_of(" (\t\r\n");
+            std::string macroName = (nameEnd == std::string::npos) ? rest : rest.substr(0, nameEnd);
+            if (!macroName.empty() && macroName.rfind("__", 0) != 0 && macroName != "GL_ES") {
+                output << "#undef " << macroName << "\n";
+            }
+            std::istringstream iss(rest);
             std::string name, val;
             iss >> name >> val;
             if (!name.empty()) {
                 m_macros[name] = val.empty() ? "1" : val;
             }
             output << line << "\n";
+            continue;
+        }
+
+        // Handle #extension directives: strip from body to avoid invalid placement after tokens
+        if (trimmed.rfind("#extension", 0) == 0) {
+            output << "// [hoisted/stripped extension: " << trimmed << "]\n";
             continue;
         }
 
@@ -169,10 +181,7 @@ std::string Preprocessor::processInternal(const std::string& source, const std::
 
 std::string Preprocessor::preprocess(const std::string& source, const std::string& filename) {
     std::ostringstream header;
-    header << "// Preprocessed by Arke-Android (v0.1.1)\n"
-           << "#version 320 es\n"
-           << "precision highp float;\n"
-           << "precision highp int;\n\n";
+    header << "// Preprocessed by Arke-Android (v0.1.1)\n\n";
 
     // Inject base macros
     for (const auto& [k, v] : m_macros) {

@@ -1,7 +1,9 @@
 #include "arke/shader/pipeline.hpp"
 #include "arke/logger.hpp"
+#include "arke/platform/gles_hook.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -92,23 +94,57 @@ bool ShaderPipeline::loadShaderStage(
 }
 
 bool ShaderPipeline::loadPack(const std::string& packPath) {
-    m_currentPackPath = packPath;
+    std::string resolvedPath = packPath;
+    if (resolvedPath.size() > 4 && (resolvedPath.substr(resolvedPath.size() - 4) == ".zip" ||
+                                    resolvedPath.substr(resolvedPath.size() - 7) == ".mcpack")) {
+        std::string unzippedCandidate = resolvedPath.substr(0, resolvedPath.find_last_of('.'));
+        if (posix_file_exists(unzippedCandidate + "/shaders")) {
+            resolvedPath = unzippedCandidate;
+        } else {
+            std::string name = resolvedPath.substr(resolvedPath.find_last_of('/') + 1);
+            size_t dot = name.find_last_of('.');
+            if (dot != std::string::npos) name = name.substr(0, dot);
+            std::vector<std::string> searchCandidates = {
+                "/storage/emulated/0/Download/" + name,
+                "/sdcard/Download/" + name,
+                "/storage/emulated/0/Android/data/com.mojang.minecraftpe/files/games/com.mojang/mods/arke/shaderpacks/" + name
+            };
+            bool found = false;
+            for (const auto& cand : searchCandidates) {
+                if (posix_file_exists(cand + "/shaders")) {
+                    resolvedPath = cand;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                std::string targetDir = "/storage/emulated/0/Download/" + name;
+                std::string cmd = "unzip -q -o \"" + packPath + "\" -d \"" + targetDir + "\" 2>/dev/null";
+                system(cmd.c_str());
+                if (posix_file_exists(targetDir + "/shaders")) {
+                    resolvedPath = targetDir;
+                }
+            }
+        }
+    }
+
+    m_currentPackPath = resolvedPath;
     m_compiledPasses.clear();
 
     // Extract pack name
-    size_t lastSlash = packPath.find_last_of('/');
-    if (lastSlash != std::string::npos && lastSlash + 1 < packPath.size()) {
-        m_currentPackName = packPath.substr(lastSlash + 1);
+    size_t lastSlash = resolvedPath.find_last_of('/');
+    if (lastSlash != std::string::npos && lastSlash + 1 < resolvedPath.size()) {
+        m_currentPackName = resolvedPath.substr(lastSlash + 1);
     } else {
-        m_currentPackName = packPath;
+        m_currentPackName = resolvedPath;
     }
 
-    Logger::instance().info("[ShaderPipeline] Initializing shader pack: " + m_currentPackName + " from " + packPath);
+    Logger::instance().info("[ShaderPipeline] Initializing shader pack: " + m_currentPackName + " from " + resolvedPath);
 
     // 1. Parse shaders.properties
-    std::string propsPath = packPath + "/shaders/shaders.properties";
+    std::string propsPath = resolvedPath + "/shaders/shaders.properties";
     if (!posix_file_exists(propsPath)) {
-        propsPath = packPath + "/shaders.properties";
+        propsPath = resolvedPath + "/shaders.properties";
     }
     if (posix_file_exists(propsPath)) {
         std::string propsContent = posix_read_file(propsPath);
@@ -117,10 +153,34 @@ bool ShaderPipeline::loadPack(const std::string& packPath) {
                                std::to_string(m_properties.getProperties().size()) + " properties)");
     }
 
+    // Parse lib/config.glsl for options if present
+    std::string configPath = resolvedPath + "/shaders/lib/config.glsl";
+    if (!posix_file_exists(configPath)) {
+        configPath = resolvedPath + "/lib/config.glsl";
+    }
+    if (posix_file_exists(configPath)) {
+        std::string configContent = posix_read_file(configPath);
+        m_properties.parseConfigGlsl(configContent);
+        Logger::instance().info("[ShaderPipeline] Parsed lib/config.glsl options");
+    }
+
+    // Sync features to ArkeShaderState for custom pack pipeline
+    auto& shaderState = platform::getArkeShaderState();
+    if (m_currentPackName.find("MakeUp") != std::string::npos) {
+        auto volLight = m_properties.getProperty("VOL_LIGHT");
+        shaderState.customGodrays = (!volLight.has_value() || *volLight != "0");
+        auto reflex = m_properties.getProperty("REFLECTION_SLIDER");
+        shaderState.customWaterReflect = (!reflex.has_value() || *reflex != "0");
+        shaderState.customDynamicShadows = m_properties.hasFeature("SHADOW_CASTING") || !m_properties.hasFeature("!SHADOW_CASTING");
+        shaderState.customBloom = m_properties.hasFeature("BLOOM") || !m_properties.hasFeature("!BLOOM");
+        auto aber = m_properties.getProperty("CHROMA_ABER");
+        shaderState.customChromaAber = (aber.has_value() && *aber != "0");
+    }
+
     // 2. Discover and compile passes
-    std::string shadersDir = packPath + "/shaders";
+    std::string shadersDir = resolvedPath + "/shaders";
     if (!posix_file_exists(shadersDir)) {
-        shadersDir = packPath;
+        shadersDir = resolvedPath;
     }
 
     const std::vector<std::pair<std::string, PassStage>> targetPasses = {

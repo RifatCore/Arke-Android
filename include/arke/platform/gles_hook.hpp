@@ -15,6 +15,14 @@ struct ArkeShaderState {
     float bloomStrength{0.35f}; // range 0.0f .. 1.0f
     float warmth{0.25f};        // range -0.5f .. 0.8f
 
+    // Custom Shader Pack toggles (MakeUp-UltraFast & disk packs)
+    bool customGodrays{true};
+    bool customWaterReflect{true};
+    bool customDynamicShadows{true};
+    bool customBloom{true};
+    bool customChromaAber{false};
+    bool customDof{false};
+
     void applyPreset(int mode) {
         presetMode = mode;
         if (mode == 0) { // Vibrant ACES Filmic

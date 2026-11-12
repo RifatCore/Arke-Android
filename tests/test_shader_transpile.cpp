@@ -6,6 +6,16 @@
 #include "arke/shader/properties_parser.hpp"
 #include "arke/shader/preprocessor.hpp"
 #include "arke/shader/compiler.hpp"
+#include "arke/shader/pipeline.hpp"
+#include "arke/platform/gles_hook.hpp"
+#include <unistd.h>
+
+namespace arke::platform {
+static ArkeShaderState s_testShaderState;
+ArkeShaderState& getArkeShaderState() {
+    return s_testShaderState;
+}
+}
 
 void testPropertiesParser() {
     std::cout << "[Test] Running PropertiesParser..." << std::endl;
@@ -148,6 +158,57 @@ void testUniformBridgeInterception() {
     std::cout << "  -> UniformBridge Interception PASSED!" << std::endl;
 }
 
+void testMakeUpUltraFastTranspile() {
+    std::cout << "[Test] Running MakeUp-UltraFast Shader Pack Transpile..." << std::endl;
+    std::string zipPath = "/storage/emulated/0/Download/MakeUp-UltraFast-9.6.zip";
+    std::string dirPath = "/storage/emulated/0/Download/MakeUp-UltraFast-9.6";
+
+    std::string testPath = zipPath;
+    if (access(zipPath.c_str(), F_OK) != 0 && access(dirPath.c_str(), F_OK) == 0) {
+        testPath = dirPath;
+    }
+
+    auto& pipeline = arke::shader::ShaderPipeline::instance();
+    bool loaded = pipeline.loadPack(testPath);
+    assert(loaded);
+    assert(pipeline.isPackLoaded());
+
+    const auto& passes = pipeline.getPasses();
+    std::cout << "  -> Loaded " << passes.size() << " passes from " << testPath << std::endl;
+    assert(!passes.empty());
+
+    for (const auto& pass : passes) {
+        if (!pass.vertexESSL.empty()) {
+            assert(pass.vertexESSL.find("#extension GL_OES_standard_derivatives") == std::string::npos);
+            assert(pass.vertexESSL.find("#version 320 es") != std::string::npos);
+
+            // Verify no #extension directive occurs after precision or non-preprocessor tokens
+            size_t precPos = pass.vertexESSL.find("precision highp float;");
+            if (precPos != std::string::npos) {
+                size_t extPos = pass.vertexESSL.find("#extension", precPos);
+                assert(extPos == std::string::npos);
+            }
+        }
+
+        if (!pass.fragmentESSL.empty()) {
+            assert(pass.fragmentESSL.find("#extension GL_OES_standard_derivatives") == std::string::npos);
+            assert(pass.fragmentESSL.find("#version 320 es") != std::string::npos);
+
+            size_t precPos = pass.fragmentESSL.find("precision highp float;");
+            if (precPos != std::string::npos) {
+                size_t extPos = pass.fragmentESSL.find("#extension", precPos);
+                assert(extPos == std::string::npos);
+            }
+
+            // Verify viewWidth / viewHeight / texture2D replacements did not produce syntax errors
+            assert(pass.fragmentESSL.find("uniform float (") == std::string::npos);
+            assert(pass.fragmentESSL.find("#define texture(") == std::string::npos);
+        }
+    }
+
+    std::cout << "  -> MakeUp-UltraFast Transpile PASSED (Zero unhoisted extensions, zero syntax collisions)!" << std::endl;
+}
+
 int main() {
     std::cout << "==========================================" << std::endl;
     std::cout << "  Arke-Android Unit & Transpile Test Suite" << std::endl;
@@ -157,6 +218,7 @@ int main() {
     testPreprocessor();
     testCrossCompiler();
     testUniformBridgeInterception();
+    testMakeUpUltraFastTranspile();
 
     std::cout << "\nALL ARKE-ANDROID TESTS PASSED SUCCESSFULLY!" << std::endl;
     return 0;

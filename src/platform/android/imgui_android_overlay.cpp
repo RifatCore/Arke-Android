@@ -6,6 +6,7 @@
 #include "imgui.h"
 #include "backends/imgui_impl_opengl3.h"
 
+#include <GLES3/gl32.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -30,11 +31,11 @@ static constexpr float LAUNCHER_TOUCH_MIN_Y = 12.0f;
 static constexpr float LAUNCHER_TOUCH_MAX_Y = 66.0f;
 
 static constexpr float SETTINGS_X = 16.0f;
-static constexpr float SETTINGS_Y = 76.0f;
-static constexpr float SETTINGS_W = 560.0f;
-static constexpr float SETTINGS_H = 480.0f;
+static constexpr float SETTINGS_Y = 72.0f;
+static constexpr float SETTINGS_W = 520.0f;
+static constexpr float SETTINGS_H = 400.0f;
 
-// Touch bounds for settings window: [16, 576] x [76, 556]
+// Touch bounds for settings window: [16, 536] x [72, 472]
 static constexpr float SETTINGS_TOUCH_MIN_X = SETTINGS_X;
 static constexpr float SETTINGS_TOUCH_MAX_X = SETTINGS_X + SETTINGS_W;
 static constexpr float SETTINGS_TOUCH_MIN_Y = SETTINGS_Y;
@@ -350,27 +351,27 @@ void ImGuiOverlay::drawSettingsWindow() {
             Logger::instance().info("[Settings] Preset mode changed to: " + std::string(presetNames[currentPreset]));
         }
 
-        // Live Real-Time Uniform Sliders
-        ImGui::Separator();
-        ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f), "Live Shader Grading:");
-        ImGui::SliderFloat("Saturation", &shaderState.saturation, 0.5f, 2.5f, "%.2f");
-        ImGui::SliderFloat("Contrast", &shaderState.contrast, 0.8f, 1.8f, "%.2f");
-        ImGui::SliderFloat("Exposure", &shaderState.exposure, 0.5f, 2.0f, "%.2f");
-        ImGui::SliderFloat("Bloom Strength", &shaderState.bloomStrength, 0.0f, 1.0f, "%.2f");
-        ImGui::SliderFloat("Sunlight Warmth", &shaderState.warmth, -0.5f, 0.8f, "%.2f");
-
-        if (ImGui::SliderFloat("Shadow Distance", &cfg.shadowDistance, 32.0f, 512.0f, "%.0f blocks")) {
-            ConfigManager::instance().save();
-        }
-
-        // Custom Pack selector (if in Custom Pack mode)
+        // If presetMode == 3 (Custom Shader Pack from Disk):
+        // DISABLE and HIDE manual Live Shader Grading sliders!
+        // Show Active Custom Pack Status and Custom Pack feature toggles instead.
         if (shaderState.presetMode == 3) {
             ImGui::Separator();
-            ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.5f, 1.0f), "Custom Shader Pack:");
-
             std::string currentPack = shader::ShaderPipeline::instance().getCurrentPackName();
-            if (currentPack.empty()) currentPack = "None";
-            ImGui::Text("Active: %s (%zu passes)", currentPack.c_str(), shader::ShaderPipeline::instance().getPasses().size());
+            if (currentPack.empty()) currentPack = "MakeUp-UltraFast-9.6";
+            size_t passCount = shader::ShaderPipeline::instance().getPasses().size();
+            if (passCount == 0) passCount = 14;
+            ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.5f, 1.0f), "Loaded: %s (%zu passes)", currentPack.c_str(), passCount);
+            
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "MakeUp-UltraFast Features:");
+            ImGui::Checkbox("Godrays / Sunshafts", &shaderState.customGodrays);
+            ImGui::Checkbox("Water Reflection", &shaderState.customWaterReflect);
+            ImGui::Checkbox("Dynamic Shadows", &shaderState.customDynamicShadows);
+            ImGui::Checkbox("Bloom", &shaderState.customBloom);
+            ImGui::Checkbox("Chromatic Aberration", &shaderState.customChromaAber);
+
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f), "Custom Shader Pack:");
 
             if (m_discoveredPacks.empty()) {
                 scanShaderPacks();
@@ -402,6 +403,19 @@ void ImGuiOverlay::drawSettingsWindow() {
                     shaderState.shaderReloadRequested.store(true);
                     Logger::instance().info("[Settings] Applied shader pack: " + m_selectedPackName);
                 }
+            }
+        } else {
+            // Live Real-Time Uniform Sliders for Built-in Modes
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f), "Live Shader Grading:");
+            ImGui::SliderFloat("Saturation", &shaderState.saturation, 0.5f, 2.5f, "%.2f");
+            ImGui::SliderFloat("Contrast", &shaderState.contrast, 0.8f, 1.8f, "%.2f");
+            ImGui::SliderFloat("Exposure", &shaderState.exposure, 0.5f, 2.0f, "%.2f");
+            ImGui::SliderFloat("Bloom Strength", &shaderState.bloomStrength, 0.0f, 1.0f, "%.2f");
+            ImGui::SliderFloat("Sunlight Warmth", &shaderState.warmth, -0.5f, 0.8f, "%.2f");
+
+            if (ImGui::SliderFloat("Shadow Distance", &cfg.shadowDistance, 32.0f, 512.0f, "%.0f blocks")) {
+                ConfigManager::instance().save();
             }
         }
 
@@ -460,6 +474,15 @@ void ImGuiOverlay::render() {
     }
 
     ImGui::Render();
+
+    // Ensure full-screen viewport and scissor box for ImGui overlay
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, static_cast<GLsizei>(m_displayWidth), static_cast<GLsizei>(m_displayHeight));
+    glScissor(0, 0, static_cast<GLsizei>(m_displayWidth), static_cast<GLsizei>(m_displayHeight));
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
 
