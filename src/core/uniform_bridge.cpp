@@ -1,6 +1,9 @@
 #include "arke/uniform_bridge.hpp"
+#include "arke/logger.hpp"
 #include <cmath>
 #include <sstream>
+#include <unordered_set>
+#include <string>
 
 namespace arke {
 
@@ -20,7 +23,6 @@ UniformBridge::UniformBridge() {
 }
 
 static Mat4 computeInverse(const Mat4& in) {
-    // Simple 4x4 inverse calculation
     Mat4 inv;
     const float* m = in.m.data();
     float* out = inv.m.data();
@@ -69,6 +71,13 @@ void UniformBridge::updateFrame(float deltaTime, double totalSeconds, uint32_t t
     m_frame.time.frame++;
     m_frame.time.ticks = tickCount;
     m_frame.time.dayTime = static_cast<float>(std::fmod(totalSeconds, 1200.0) / 1200.0);
+
+    if (m_frame.time.frame % 300 == 0) {
+        float fps = (deltaTime > 0.0001f) ? (1.0f / deltaTime) : 60.0f;
+        Logger::instance().info("[UniformBridge] Frame " + std::to_string(m_frame.time.frame) +
+                               " | FPS: " + std::to_string(static_cast<int>(fps)) +
+                               " | Time: " + std::to_string(m_frame.time.seconds) + "s");
+    }
 }
 
 void UniformBridge::setCamera(const Vec3& pos, float pitch, float yaw, float fov, float nearPlane, float farPlane, float aspect) {
@@ -96,7 +105,7 @@ void UniformBridge::setMatrices(const Mat4& view, const Mat4& proj) {
 
     m_pass.view = view;
     m_pass.projection = proj;
-    m_pass.inverseViewProjection = computeInverse(proj); // approx
+    m_pass.inverseViewProjection = computeInverse(proj);
 }
 
 void UniformBridge::setPlayerState(uint32_t flags, uint32_t medium, float health, float hunger) {

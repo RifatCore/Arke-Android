@@ -5,7 +5,7 @@
 namespace arke::platform {
 
 // EGL and GLES hook callbacks
-void onEglSwapBuffersPost();
+void onEglSwapBuffersPost(void* dpy = nullptr, void* surface = nullptr);
 void onGlShaderSourcePre(uint32_t shader, int32_t count, const char* const* string, const int32_t* length, const char** outCustomShader);
 void onGlCompileShaderPost(uint32_t shader);
 void onGlGetUniformLocationPost(uint32_t program, const char* name, int32_t location);

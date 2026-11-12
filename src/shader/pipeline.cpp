@@ -1,10 +1,33 @@
 #include "arke/shader/pipeline.hpp"
 #include "arke/logger.hpp"
-#include <fstream>
-#include <sstream>
-#include <filesystem>
+
+#include <cstdio>
+#include <cstring>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <string>
 
 namespace arke::shader {
+
+static bool posix_file_exists(const std::string& path) {
+    return (access(path.c_str(), F_OK) == 0);
+}
+
+static std::string posix_read_file(const std::string& path) {
+    FILE* fp = fopen(path.c_str(), "rb");
+    if (!fp) return "";
+    fseek(fp, 0, SEEK_END);
+    long sz = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    if (sz <= 0) {
+        fclose(fp);
+        return "";
+    }
+    std::string content(sz, '\0');
+    fread(&content[0], 1, sz, fp);
+    fclose(fp);
+    return content;
+}
 
 ShaderPipeline& ShaderPipeline::instance() {
     static ShaderPipeline s_instance;
@@ -12,20 +35,16 @@ ShaderPipeline& ShaderPipeline::instance() {
 }
 
 ShaderPipeline::ShaderPipeline() {
-    // Setup include resolution relative to shaders/ directory
     m_preprocessor.setIncludeCallback([this](const std::string& includePath) -> std::string {
         std::string fullPath = m_currentPackPath + "/shaders" + includePath;
-        if (!std::filesystem::exists(fullPath)) {
+        if (!posix_file_exists(fullPath)) {
             fullPath = m_currentPackPath + "/" + includePath;
         }
-        std::ifstream file(fullPath);
-        if (!file.is_open()) {
-            Logger::instance().warn("Unable to open include file: " + fullPath);
-            return "";
+        std::string content = posix_read_file(fullPath);
+        if (content.empty()) {
+            Logger::instance().warn("[ShaderPipeline] Unable to read include file: " + fullPath);
         }
-        std::stringstream ss;
-        ss << file.rdbuf();
-        return ss.str();
+        return content;
     });
 }
 
@@ -35,23 +54,18 @@ bool ShaderPipeline::loadShaderStage(
     const std::string& vshPath,
     const std::string& fshPath
 ) {
-    std::string vshSource, fshSource;
-
-    if (std::filesystem::exists(vshPath)) {
-        std::ifstream vf(vshPath);
-        std::stringstream ss;
-        ss << vf.rdbuf();
-        vshSource = ss.str();
-    }
-    if (std::filesystem::exists(fshPath)) {
-        std::ifstream ff(fshPath);
-        std::stringstream ss;
-        ss << ff.rdbuf();
-        fshSource = ss.str();
-    }
+    std::string vshSource = posix_read_file(vshPath);
+    std::string fshSource = posix_read_file(fshPath);
 
     if (vshSource.empty() && fshSource.empty()) {
         return false;
+    }
+
+    if (!vshSource.empty()) {
+        Logger::instance().info("[ShaderPipeline] Loaded vertex shader: " + vshPath + " (" + std::to_string(vshSource.size()) + " bytes)");
+    }
+    if (!fshSource.empty()) {
+        Logger::instance().info("[ShaderPipeline] Loaded fragment shader: " + fshPath + " (" + std::to_string(fshSource.size()) + " bytes)");
     }
 
     CompiledPass pass;
@@ -73,7 +87,7 @@ bool ShaderPipeline::loadShaderStage(
     }
 
     m_compiledPasses.push_back(std::move(pass));
-    Logger::instance().info("Pipeline loaded and compiled pass: " + baseName);
+    Logger::instance().info("[ShaderPipeline] Compiled pipeline stage: " + baseName);
     return true;
 }
 
@@ -81,28 +95,31 @@ bool ShaderPipeline::loadPack(const std::string& packPath) {
     m_currentPackPath = packPath;
     m_compiledPasses.clear();
 
-    std::filesystem::path p(packPath);
-    m_currentPackName = p.filename().string();
+    // Extract pack name
+    size_t lastSlash = packPath.find_last_of('/');
+    if (lastSlash != std::string::npos && lastSlash + 1 < packPath.size()) {
+        m_currentPackName = packPath.substr(lastSlash + 1);
+    } else {
+        m_currentPackName = packPath;
+    }
 
-    Logger::instance().info("Initializing shader pack: " + m_currentPackName + " from " + packPath);
+    Logger::instance().info("[ShaderPipeline] Initializing shader pack: " + m_currentPackName + " from " + packPath);
 
     // 1. Parse shaders.properties
     std::string propsPath = packPath + "/shaders/shaders.properties";
-    if (!std::filesystem::exists(propsPath)) {
+    if (!posix_file_exists(propsPath)) {
         propsPath = packPath + "/shaders.properties";
     }
-    if (std::filesystem::exists(propsPath)) {
-        std::ifstream pf(propsPath);
-        std::stringstream ss;
-        ss << pf.rdbuf();
-        m_properties.parseProperties(ss.str());
-        Logger::instance().info("Parsed shaders.properties (" +
+    if (posix_file_exists(propsPath)) {
+        std::string propsContent = posix_read_file(propsPath);
+        m_properties.parseProperties(propsContent);
+        Logger::instance().info("[ShaderPipeline] Parsed shaders.properties (" +
                                std::to_string(m_properties.getProperties().size()) + " properties)");
     }
 
     // 2. Discover and compile passes
     std::string shadersDir = packPath + "/shaders";
-    if (!std::filesystem::exists(shadersDir)) {
+    if (!posix_file_exists(shadersDir)) {
         shadersDir = packPath;
     }
 
@@ -130,7 +147,7 @@ bool ShaderPipeline::loadPack(const std::string& packPath) {
     }
 
     m_loaded = !m_compiledPasses.empty();
-    Logger::instance().info("Shader pack pipeline loaded with " +
+    Logger::instance().info("[ShaderPipeline] Shader pack loaded with " +
                            std::to_string(m_compiledPasses.size()) + " active passes.");
     return m_loaded;
 }
